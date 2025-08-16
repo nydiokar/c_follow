@@ -32,9 +32,9 @@ export class BackfillService {
     };
   }
 
-  async backfillCoin(coinId: number, chain: string, pairAddress: string): Promise<void> {
+  async backfillCoin(coinId: number, chain: string, tokenAddress: string): Promise<void> {
     try {
-      logger.info(`Starting backfill for coin ${coinId} (${chain}:${pairAddress})`);
+      logger.info(`Starting backfill for coin ${coinId} (${chain}:${tokenAddress})`);
 
       // Check if warmup is already complete
       const isWarm = await this.rollingWindow.isWarmupComplete(coinId, 72);
@@ -44,7 +44,7 @@ export class BackfillService {
       }
 
       // Generate historical data points (simulated since DexScreener doesn't provide historical data)
-      const historicalData = await this.generateHistoricalData(chain, pairAddress);
+      const historicalData = await this.generateHistoricalData(chain, tokenAddress);
       
       if (historicalData.length === 0) {
         logger.warn(`No historical data available for coin ${coinId}`);
@@ -62,11 +62,11 @@ export class BackfillService {
     }
   }
 
-  async scheduleBackfill(coinId: number, chain: string, pairAddress: string): Promise<void> {
+  async scheduleBackfill(coinId: number, chain: string, tokenAddress: string): Promise<void> {
     await globalJobQueue.addJob('backfill_coin', {
       coinId,
       chain,
-      pairAddress
+      tokenAddress: tokenAddress
     }, {
       priority: 3, // Medium priority
       maxRetries: this.config.maxRetries
@@ -90,7 +90,7 @@ export class BackfillService {
         select: {
           coinId: true,
           chain: true,
-          pairAddress: true,
+          tokenAddress: true, 
           symbol: true
         }
       });
@@ -101,7 +101,7 @@ export class BackfillService {
         try {
           const isWarm = await this.rollingWindow.isWarmupComplete(coin.coinId, 72);
           if (!isWarm) {
-            await this.scheduleBackfill(coin.coinId, coin.chain, coin.pairAddress);
+            await this.scheduleBackfill(coin.coinId, coin.chain, coin.tokenAddress);
           } else {
             logger.debug(`Coin ${coin.symbol} already warm, skipping backfill`);
           }
@@ -118,10 +118,10 @@ export class BackfillService {
     }
   }
 
-  private async generateHistoricalData(chain: string, pairAddress: string): Promise<DataPoint[]> {
+  private async generateHistoricalData(chain: string, tokenAddress: string): Promise<DataPoint[]> {
     try {
       // Get current data point as baseline
-      const currentData = await this.dexScreener.getPairInfo(chain, pairAddress);
+      const currentData = await this.dexScreener.getPairInfo(chain, tokenAddress);
       if (!currentData) {
         return [];
       }
@@ -165,7 +165,7 @@ export class BackfillService {
       return dataPoints.sort((a, b) => a.timestamp - b.timestamp);
 
     } catch (error) {
-      logger.error(`Failed to generate historical data for ${chain}:${pairAddress}:`, error);
+      logger.error(`Failed to generate historical data for ${chain}:${tokenAddress}:`, error);
       return [];
     }
   }

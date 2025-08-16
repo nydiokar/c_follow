@@ -10,7 +10,7 @@ datasource db {
 model Coin {
   coinId            Int                @id @default(autoincrement()) @map("coin_id")
   chain             String
-  pairAddress       String             @map("pair_address")
+  tokenAddress      String             @map("token_address")
   symbol            String
   name              String?
   decimals          Int?
@@ -22,7 +22,7 @@ model Coin {
   symbolAliases     SymbolAlias[]
   hotEntries        HotEntry[]
 
-  @@unique([chain, pairAddress])
+  @@unique([chain, tokenAddress])
   @@index([symbol])
   @@index([isActive])
   @@map("coin")
@@ -80,10 +80,6 @@ model HotEntry {
   websitesJson    String?           @map("websites_json")
   socialsJson     String?           @map("socials_json")
   addedAtUtc      Int               @map("added_at_utc")
-  anchorPrice     Float             @map("anchor_price")
-  anchorMcap      Float?            @map("anchor_mcap")
-  pctTarget       Float?            @map("pct_target")
-  mcapTargets     String?           @map("mcap_targets")
   failsafeFired   Boolean           @default(false) @map("failsafe_fired")
   isActive        Boolean           @default(true) @map("is_active")
   alertHistory    AlertHistory[]
@@ -96,11 +92,13 @@ model HotEntry {
 }
 
 model HotTriggerState {
-  hotId     Int      @map("hot_id")
-  trigKind  String   @map("trig_kind")
-  trigValue Float    @map("trig_value")
-  fired     Boolean  @default(false)
-  hotEntry  HotEntry @relation(fields: [hotId], references: [hotId], onDelete: Cascade)
+  hotId       Int      @map("hot_id")
+  trigKind    String   @map("trig_kind")
+  trigValue   Float    @map("trig_value")
+  fired       Boolean  @default(false)
+  anchorPrice Float    @map("anchor_price")
+  anchorMcap  Float?   @map("anchor_mcap")
+  hotEntry    HotEntry @relation(fields: [hotId], references: [hotId], onDelete: Cascade)
 
   @@id([hotId, trigKind, trigValue])
   @@map("hot_trigger_state")

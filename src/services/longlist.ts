@@ -118,14 +118,14 @@ export class LongListService {
       await this.db.addCoinToLongList(
         pair.symbol,
         pair.chainId,
-        pair.pairAddress,
+        pair.tokenAddress,
         pair.name
       );
 
       logger.info(`Added ${symbol} to long list`, { 
         symbol: pair.symbol, 
         chain: pair.chainId, 
-        pairAddress: pair.pairAddress 
+        tokenAddress: pair.tokenAddress 
       });
 
       return true;
@@ -225,15 +225,15 @@ export class LongListService {
 
       const pairRequests = coins.map(coin => ({
         chainId: coin.chain,
-        pairAddress: coin.pairAddress
+        tokenAddress: coin.tokenAddress
       }));
 
-      const pairData = await this.dexScreener.batchGetPairs(pairRequests);
+      const pairData = await this.dexScreener.batchGetTokens(pairRequests);
       const stateMap = new Map(states.map(s => [s.coinId, s]));
       const triggers: TriggerResult[] = [];
 
       for (const coin of coins) {
-        const key = `${coin.chain}:${coin.pairAddress}`;
+        const key = `${coin.chain}:${coin.tokenAddress}`;
         const pair = pairData.get(key);
         const state = stateMap.get(coin.coinId);
 
@@ -415,18 +415,18 @@ export class LongListService {
         return [];
       }
 
-      const pairRequests = coins.map(coin => ({
+      const tokenRequests = coins.map(coin => ({
         chainId: coin.chain,
-        pairAddress: coin.pairAddress
+        tokenAddress: coin.tokenAddress
       }));
 
-      const pairData = await this.dexScreener.batchGetPairs(pairRequests);
+      const tokenData = await this.dexScreener.batchGetTokens(tokenRequests);
       const stateMap = new Map(states.map(s => [s.coinId, s]));
       const reportData: AnchorReportData[] = [];
 
       for (const coin of coins) {
-        const key = `${coin.chain}:${coin.pairAddress}`;
-        const pair = pairData.get(key);
+        const key = `${coin.chain}:${coin.tokenAddress}`;
+        const pair = tokenData.get(key);
         const state = stateMap.get(coin.coinId);
 
         if (!pair || !state || !this.dexScreener.validatePairData(pair)) {

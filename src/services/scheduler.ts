@@ -54,12 +54,15 @@ export class SchedulerService {
   private async setupSchedules(config: SchedulerConfig): Promise<void> {
     this.setupAnchorReports(config.anchorTimesLocal);
     this.setupLongCheckpoints(config.longCheckpointHours);
-    this.setupHotChecks(config.hotIntervalMinutes);
+    
+    // Use environment variable for hot list interval, fallback to database config
+    const hotIntervalMinutes = parseInt(process.env.HOT_LIST_INTERVAL_MINUTES || '1') || config.hotIntervalMinutes;
+    this.setupHotChecks(hotIntervalMinutes);
 
     logger.info('Scheduled tasks:', {
       anchorTimes: config.anchorTimesLocal,
       longCheckpointHours: config.longCheckpointHours,
-      hotIntervalMinutes: config.hotIntervalMinutes
+      hotIntervalMinutes: hotIntervalMinutes
     });
   }
 

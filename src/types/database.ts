@@ -5,7 +5,7 @@ export type PrismaTransactionClient = Omit<PrismaClient, '$connect' | '$disconne
 export interface CoinData {
   coinId: number;
   chain: string;
-  pairAddress: string;
+  tokenAddress: string;
   symbol: string;
   name?: string;
   config: {

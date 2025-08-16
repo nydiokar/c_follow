@@ -13,23 +13,23 @@ class HotListTriggerEvaluator implements HotListEvaluator {
     const alerts: HotAlert[] = [];
     const now = Math.floor(Date.now() / 1000);
 
-    const priceChangeFromAnchor = ((currentPrice - entry.anchorPrice) / entry.anchorPrice) * 100;
-
-    if (!entry.failsafeFired && this.shouldTriggerFailsafe(entry, currentPrice, currentMcap)) {
-      alerts.push({
-        hotId: entry.hotId,
-        symbol: entry.symbol,
-        alertType: 'failsafe',
-        message: `${entry.symbol} FAILSAFE: -${this.failsafeThreshold}% drawdown from anchor`,
-        currentPrice,
-        currentMcap: currentMcap || 0,
-        deltaFromAnchor: priceChangeFromAnchor,
-        timestamp: now,
-      });
-    }
-
     for (const trigger of entry.activeTriggers) {
       if (trigger.fired) continue;
+
+      const priceChangeFromAnchor = ((currentPrice - trigger.anchorPrice) / trigger.anchorPrice) * 100;
+
+      if (!entry.failsafeFired && this.shouldTriggerFailsafe(trigger, currentPrice, currentMcap)) {
+        alerts.push({
+          hotId: entry.hotId,
+          symbol: entry.symbol,
+          alertType: 'failsafe',
+          message: `${entry.symbol} FAILSAFE: -${this.failsafeThreshold}% drawdown from anchor`,
+          currentPrice,
+          currentMcap: currentMcap || 0,
+          deltaFromAnchor: priceChangeFromAnchor,
+          timestamp: now,
+        });
+      }
 
       if (trigger.kind === 'pct') {
         if (this.shouldTriggerPct(trigger.value, priceChangeFromAnchor)) {
@@ -70,14 +70,14 @@ class HotListTriggerEvaluator implements HotListEvaluator {
     return !hasActiveTriggers && entry.failsafeFired;
   }
 
-  private shouldTriggerFailsafe(entry: HotListEntry, currentPrice: number, currentMcap?: number): boolean {
-    const priceDrawdown = ((entry.anchorPrice - currentPrice) / entry.anchorPrice) * 100;
+  private shouldTriggerFailsafe(trigger: HotTrigger, currentPrice: number, currentMcap?: number): boolean {
+    const priceDrawdown = ((trigger.anchorPrice - currentPrice) / trigger.anchorPrice) * 100;
     if (priceDrawdown >= this.failsafeThreshold) {
       return true;
     }
 
-    if (entry.anchorMcap && currentMcap) {
-      const mcapDrawdown = ((entry.anchorMcap - currentMcap) / entry.anchorMcap) * 100;
+    if (trigger.anchorMcap && currentMcap) {
+      const mcapDrawdown = ((trigger.anchorMcap - currentMcap) / trigger.anchorMcap) * 100;
       if (mcapDrawdown >= this.failsafeThreshold) {
         return true;
       }
@@ -113,23 +113,22 @@ export class HotListService {
     contractAddress: string,
     tokenData: PairInfo,
     options: {
-      pctTarget?: number;
+      pctTargets?: number[];
       mcapTargets?: number[];
     } = {}
   ): Promise<boolean> {
     try {
-      console.log('HotListService.addEntry called with:', { contractAddress, tokenData, options });
+      
       const now = Math.floor(Date.now() / 1000);
 
       const result = await this.prisma.$transaction(async (tx: any) => {
-        console.log('Starting database transaction...');
 
         // Upsert Coin
         const coin = await tx.coin.upsert({
           where: {
-            chain_pairAddress: {
+            chain_tokenAddress: {
               chain: tokenData.chainId,
-              pairAddress: tokenData.pairAddress
+              tokenAddress: tokenData.tokenAddress
             }
           },
           update: {
@@ -139,7 +138,7 @@ export class HotListService {
           },
           create: {
             chain: tokenData.chainId,
-            pairAddress: tokenData.pairAddress,
+            tokenAddress: tokenData.tokenAddress,
             symbol: tokenData.symbol,
             name: tokenData.name,
             isActive: true
@@ -154,10 +153,6 @@ export class HotListService {
             imageUrl: tokenData.info?.imageUrl,
             websitesJson: tokenData.info?.websites ? JSON.stringify(tokenData.info.websites) : null,
             socialsJson: tokenData.info?.socials ? JSON.stringify(tokenData.info.socials) : null,
-            anchorPrice: tokenData.price,
-            anchorMcap: tokenData.marketCap,
-            pctTarget: options.pctTarget,
-            mcapTargets: options.mcapTargets ? options.mcapTargets.join(',') : null,
             coinId: coin.coinId
           },
           create: {
@@ -169,33 +164,32 @@ export class HotListService {
             websitesJson: tokenData.info?.websites ? JSON.stringify(tokenData.info.websites) : null,
             socialsJson: tokenData.info?.socials ? JSON.stringify(tokenData.info.socials) : null,
             addedAtUtc: now,
-            anchorPrice: tokenData.price,
-            anchorMcap: tokenData.marketCap,
-            pctTarget: options.pctTarget,
-            mcapTargets: options.mcapTargets ? options.mcapTargets.join(',') : null,
             coinId: coin.coinId
           },
         });
-        console.log('HotEntry created with ID:', hotEntry.hotId);
 
-        if (options.pctTarget !== undefined) {
-          await tx.hotTriggerState.upsert({
-            where: {
-              hotId_trigKind_trigValue: {
+        if (options.pctTargets && options.pctTargets.length > 0) {
+          for (const target of options.pctTargets) {
+            await tx.hotTriggerState.upsert({
+              where: {
+                hotId_trigKind_trigValue: {
+                  hotId: hotEntry.hotId,
+                  trigKind: 'pct',
+                  trigValue: target,
+                }
+              },
+              update: { fired: false },
+              create: {
                 hotId: hotEntry.hotId,
                 trigKind: 'pct',
-                trigValue: options.pctTarget,
-              }
-            },
-            update: { fired: false },
-            create: {
-              hotId: hotEntry.hotId,
-              trigKind: 'pct',
-              trigValue: options.pctTarget,
-              fired: false,
-            },
-          });
-          console.log('PCT trigger upserted for:', options.pctTarget);
+                trigValue: target,
+                fired: false,
+                anchorPrice: tokenData.price,
+                anchorMcap: tokenData.marketCap,
+              },
+            });
+          }
+          
         }
 
         if (options.mcapTargets) {
@@ -214,13 +208,14 @@ export class HotListService {
                 trigKind: 'mcap',
                 trigValue: target,
                 fired: false,
+                anchorPrice: tokenData.price,
+                anchorMcap: tokenData.marketCap,
               },
             });
           }
-          console.log('MCAP triggers upserted for:', options.mcapTargets);
+          
         }
         
-        console.log('Transaction completed successfully, returning hotId:', hotEntry.hotId);
         return hotEntry.hotId;
       });
 
@@ -243,7 +238,6 @@ export class HotListService {
         ...options,
       });
 
-      console.log('addEntry method completed successfully, returning true');
       return true;
     } catch (error) {
       console.error('Error in addEntry method:', error);
@@ -273,25 +267,33 @@ export class HotListService {
   async checkAlerts(): Promise<HotAlert[]> {
     try {
       const entries = await this.getActiveEntries();
+      
       if (entries.length === 0) return [];
 
       const pairRequests = entries.map(entry => ({
         chainId: entry.chainId,
-        pairAddress: entry.contractAddress,
+        tokenAddress: entry.contractAddress,
       }));
 
-      const pairDataMap = await this.dexScreener.batchGetPairs(pairRequests);
+      const pairDataMap = await this.dexScreener.batchGetTokens(pairRequests);
+      
       const alerts: HotAlert[] = [];
 
       for (const entry of entries) {
         const key = `${entry.chainId}:${entry.contractAddress}`;
         const pair = pairDataMap.get(key);
+        
+        
+        if (!pair) {
+          continue;
+        }
 
-        if (!pair || !this.dexScreener.validatePairData(pair)) {
+        if (!this.dexScreener.validatePairData(pair)) {
           continue;
         }
 
         const entryAlerts = this.evaluator.evaluateEntry(entry, pair.price, pair.marketCap || undefined);
+        
         for (const alert of entryAlerts) {
           await this.recordAlert(alert, pair);
 
@@ -370,17 +372,13 @@ export class HotListService {
         websites: entry.websitesJson ? JSON.parse(entry.websitesJson) : [],
         socials: entry.socialsJson ? JSON.parse(entry.socialsJson) : [],
         addedAtUtc: entry.addedAtUtc,
-        anchorPrice: entry.anchorPrice,
-        anchorMcap: entry.anchorMcap || undefined,
-        pctTarget: entry.pctTarget || undefined,
-        mcapTargets: entry.mcapTargets ?
-          entry.mcapTargets.split(',').map((t: string) => parseFloat(t)).filter((t: number) => !isNaN(t)) :
-          undefined,
         failsafeFired: entry.failsafeFired,
         activeTriggers: entry.triggerStates.map((ts: any) => ({
           kind: ts.trigKind as 'pct' | 'mcap',
           value: ts.trigValue,
           fired: ts.fired,
+          anchorPrice: ts.anchorPrice,
+          anchorMcap: ts.anchorMcap,
         })),
       }));
     } catch (error) {

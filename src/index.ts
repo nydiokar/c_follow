@@ -10,7 +10,6 @@ import { RateLimitService } from './services/rateLimiter';
 import { DataValidator } from './utils/validation';
 import { RollingWindowManager } from './services/rollingWindow';
 import { BackfillService } from './services/backfill';
-import { MigrationService } from './services/migration';
 import { globalHealthCheck } from './services/health';
 import { globalJobQueue } from './services/jobQueue';
 import { globalAlertBus } from './events/alertBus';
@@ -39,27 +38,15 @@ class FollowCoinBot {
   private validator!: DataValidator;
   private rollingWindow!: RollingWindowManager;
   private backfill!: BackfillService;
-  private migration!: MigrationService;
   private config: AppConfig;
   private isShuttingDown = false;
 
   constructor() {
-    console.log('=== CONSTRUCTOR START ===');
     try {
       this.config = this.loadConfig();
-      console.log('Config loaded successfully:', {
-        telegramBotToken: this.config.telegramBotToken ? 'SET' : 'NOT SET',
-        telegramChatId: this.config.telegramChatId ? 'SET' : 'NOT SET',
-        databaseUrl: this.config.databaseUrl ? 'SET' : 'NOT SET',
-        timezone: this.config.timezone,
-        rateLimitMs: this.config.rateLimitMs,
-        nodeEnv: this.config.nodeEnv
-      });
       this.setupProcessHandlers();
-      console.log('=== CONSTRUCTOR COMPLETE ===');
     } catch (error) {
-      console.error('=== CONSTRUCTOR ERROR ===');
-      console.error('Error in constructor:', error);
+      logger.error('Error in constructor:', error);
       throw error;
     }
   }
@@ -68,15 +55,9 @@ class FollowCoinBot {
     const requiredEnvVars = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'DATABASE_URL'];
     const missing = requiredEnvVars.filter(key => !process.env[key]);
 
-    console.log('Required env vars:', requiredEnvVars);
-    console.log('Missing env vars:', missing);
-    console.log('process.env.TELEGRAM_BOT_TOKEN:', process.env.TELEGRAM_BOT_TOKEN ? 'SET' : 'NOT SET');
-    console.log('process.env.TELEGRAM_CHAT_ID:', process.env.TELEGRAM_CHAT_ID ? 'SET' : 'NOT SET');
-    console.log('process.env.DATABASE_URL:', process.env.DATABASE_URL ? 'SET' : 'NOT SET');
-
     if (missing.length > 0) {
       const error = `Missing required environment variables: ${missing.join(', ')}`;
-      console.error('Config error:', error);
+      logger.error('Config error:', error);
       throw new Error(error);
     }
 
@@ -89,7 +70,6 @@ class FollowCoinBot {
       nodeEnv: process.env.NODE_ENV || 'development'
     };
     
-    console.log('Config loaded successfully');
     return config;
   }
 
@@ -148,10 +128,6 @@ class FollowCoinBot {
     // Initialize database first
     await DatabaseManager.initialize();
     
-    // Run migrations
-    this.migration = new MigrationService();
-    await this.migration.runMigrations();
-
     this.db = new DatabaseService();
     await this.db.initialize();
 
@@ -163,8 +139,8 @@ class FollowCoinBot {
     globalJobQueue.addHandler({
       type: 'backfill_coin',
       handler: async (job) => {
-        const { coinId, chain, pairAddress } = job.data as any;
-        await this.backfill.backfillCoin(coinId, chain, pairAddress);
+        const { coinId, chain, tokenAddress } = job.data as any;
+        await this.backfill.backfillCoin(coinId, chain, tokenAddress);
       }
     });
 
@@ -179,12 +155,10 @@ class FollowCoinBot {
       this.hotList,
       this.dexScreener
     );
-    console.log('Telegram service created, starting bot...');
     try {
       await this.telegram.start();
-      console.log('Telegram bot started and connected!');
     } catch (error) {
-      console.error('Failed to start Telegram bot:', error);
+      logger.error('Failed to start Telegram bot:', error);
       throw error;
     }
 
@@ -215,27 +189,19 @@ class FollowCoinBot {
   }
 
   private async startServices(): Promise<void> {
-    console.log('=== STARTING SERVICES ===');
     try {
       // Start background services
-      console.log('Starting job queue...');
       globalJobQueue.start();
-      console.log('Job queue started');
       
-      console.log('Starting scheduler...');
       await withErrorHandling(
         () => this.scheduler.start(),
         createErrorContext('scheduler_start')
       );
-      console.log('Scheduler started');
 
       // Start health checks
-      console.log('Starting health checks...');
       await globalHealthCheck.performHealthCheck();
-      console.log('Health checks started');
 
       // Trigger initial backfill for existing coins
-      console.log('Setting up initial backfill...');
       await globalJobQueue.addJob('initial_backfill', {}, { priority: 1 });
       globalJobQueue.addHandler({
         type: 'initial_backfill',
@@ -243,11 +209,8 @@ class FollowCoinBot {
           await this.backfill.backfillAllCoins();
         }
       });
-      console.log('Initial backfill setup complete');
-
-      console.log('=== ALL SERVICES STARTED ===');
     } catch (error) {
-      console.error('Error starting services:', error);
+      logger.error('Error starting services:', error);
       throw error;
     }
   }
@@ -277,12 +240,12 @@ class FollowCoinBot {
     this.isShuttingDown = true;
     logger.info('Initiating graceful shutdown...');
 
-    try {
-      const shutdownTimeout = setTimeout(() => {
-        logger.error('Shutdown timeout exceeded, forcing exit');
-        process.exit(1);
-      }, 30000); // 30 second timeout
+    const shutdownTimeout = setTimeout(() => {
+      logger.error('Shutdown timeout exceeded, forcing exit');
+      process.exit(1);
+    }, 30000); // 30 second timeout
 
+    try {
       if (this.scheduler) {
         this.scheduler.stop();
         logger.info('Scheduler stopped');
@@ -306,41 +269,34 @@ class FollowCoinBot {
         await this.db.disconnect();
         logger.info('Database service stopped');
       }
-
+    } catch (error) {
+      logger.error('Error during service shutdown:', error);
+    } finally {
       await DatabaseManager.disconnect();
       logger.info('Database disconnected');
 
       clearTimeout(shutdownTimeout);
       logger.info('Graceful shutdown completed');
       process.exit(exitCode);
-
-    } catch (error) {
-      logger.error('Error during shutdown:', error);
-      process.exit(1);
     }
   }
 }
 
 async function main(): Promise<void> {
-  console.log('=== STARTING MAIN FUNCTION ===');
   try {
-    console.log('Creating FollowCoinBot instance...');
     const bot = new FollowCoinBot();
-    console.log('Starting bot...');
     await bot.start();
-    console.log('Bot started successfully!');
     
     // Keep the process alive - the bot needs to stay running
-    console.log('Bot is now running. Press Ctrl+C to stop.');
     
     // Set up graceful shutdown
     process.on('SIGINT', async () => {
-      console.log('\nReceived SIGINT, shutting down gracefully...');
+      logger.info('Received SIGINT, shutting down gracefully...');
       await bot.gracefulShutdown(0);
     });
     
     process.on('SIGTERM', async () => {
-      console.log('\nReceived SIGTERM, shutting down gracefully...');
+      logger.info('Received SIGTERM, shutting down gracefully...');
       await bot.gracefulShutdown(0);
     });
     
@@ -350,12 +306,11 @@ async function main(): Promise<void> {
     });
     
   } catch (error) {
-    console.error('=== MAIN FUNCTION ERROR ===');
-    console.error('Error type:', typeof error);
-    console.error('Error message:', error instanceof Error ? error.message : String(error));
-    console.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');
-    console.error('Full error object:', error);
-    logger.error('Failed to start bot:', error);
+    logger.error('Failed to start bot:', {
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : 'No stack trace',
+      errorObject: error
+    });
     process.exit(1);
   }
 }

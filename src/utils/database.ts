@@ -1,6 +1,9 @@
 import { PrismaClient } from '@prisma/client';
 import { logger } from './logger';
 
+// Configuration constants - keep in sync with scheduler!
+const HOT_LIST_CHECK_INTERVAL_MINUTES = 1; // Change this to whatever you want!
+
 export class DatabaseManager {
   private static instance: PrismaClient | null = null;
   private static isInitialized = false;
@@ -36,33 +39,42 @@ export class DatabaseManager {
     return this.instance;
   }
 
-  static async initialize(): Promise<void> {
+  static async initialize(retries = 3, delay = 2000): Promise<void> {
     if (this.isInitialized) return;
 
-    try {
-      const prisma = this.getInstance();
-      await prisma.$connect();
-      
-      // Enable WAL mode for better concurrency
-      // Note: journal_mode PRAGMA returns results, so we need to handle it differently
+    for (let i = 0; i < retries; i++) {
       try {
-        await prisma.$queryRaw`PRAGMA journal_mode=WAL`;
-        logger.info('WAL mode enabled');
-      } catch (error) {
-        logger.warn('Could not enable WAL mode, continuing with default:', error);
-      }
-      
-      await prisma.$executeRaw`PRAGMA synchronous=NORMAL`;
-      await prisma.$executeRaw`PRAGMA temp_store=MEMORY`;
-      await prisma.$executeRaw`PRAGMA cache_size=10000`;
+        const prisma = this.getInstance();
+        await prisma.$connect();
+        
+        // Enable WAL mode for better concurrency
+        // Note: journal_mode PRAGMA returns results, so we need to handle it differently
+        try {
+          await prisma.$queryRaw`PRAGMA journal_mode=WAL`;
+          logger.info('WAL mode enabled');
+        } catch (error) {
+          logger.warn('Could not enable WAL mode, continuing with default:', error);
+        }
+        
+        await prisma.$executeRaw`PRAGMA synchronous=NORMAL`;
+        await prisma.$executeRaw`PRAGMA temp_store=MEMORY`;
+        await prisma.$executeRaw`PRAGMA cache_size=10000`;
 
-      await this.ensureDefaultConfig();
-      
-      this.isInitialized = true;
-      logger.info('Database initialized successfully with optimized settings');
-    } catch (error) {
-      logger.error('Failed to initialize database:', error);
-      throw error;
+        await this.ensureDefaultConfig();
+        
+        this.isInitialized = true;
+        logger.info('Database initialized successfully with optimized settings');
+        return; // Success, exit the loop
+      } catch (error) {
+        logger.error(`Failed to initialize database on attempt ${i + 1}/${retries}:`, error);
+        if (i < retries - 1) {
+          logger.info(`Retrying in ${delay / 1000} seconds...`);
+          await new Promise(res => setTimeout(res, delay));
+        } else {
+          logger.error('All database initialization attempts failed.');
+          throw error;
+        }
+      }
     }
   }
 
@@ -80,7 +92,7 @@ export class DatabaseManager {
           anchorTimesLocal: '08:00,20:00',
           anchorPeriodHours: 12,
           longCheckpointHours: 6,
-          hotIntervalMinutes: 5,
+          hotIntervalMinutes: 1,
           cooldownHours: 2.0,
           hysteresisPct: 30.0
         }

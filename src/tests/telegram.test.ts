@@ -207,7 +207,7 @@ describe('TelegramService', () => {
       const mockMatch = [ '', `${testContract} -10% mcap=1M` ] as RegExpMatchArray;
       const mockPair: PairInfo = {
         chainId: 'solana',
-        pairAddress: 'mockPair',
+        tokenAddress: 'mockPair',
         symbol: 'TEST',
         name: 'Test Coin',
         price: 1,

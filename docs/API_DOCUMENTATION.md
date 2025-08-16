@@ -45,12 +45,12 @@ Cleanly closes database connections.
 await db.disconnect();
 ```
 
-##### `addCoin(chain: string, pairAddress: string, symbol: string, name?: string): Promise<Coin>`
+##### `addCoin(chain: string, tokenAddress: string, symbol: string, name?: string): Promise<Coin>`
 Adds a new cryptocurrency to the system.
 
 **Parameters:**
 - `chain`: Blockchain identifier (e.g., "solana", "ethereum")
-- `pairAddress`: Unique pair address on the blockchain
+- `tokenAddress`: Unique pair address on the blockchain
 - `symbol`: Trading symbol (e.g., "SOL", "BTC")
 - `name`: Optional full name of the cryptocurrency
 
@@ -164,12 +164,12 @@ Creates a new DexScreener service instance with rate limiting.
 **Parameters:**
 - `rateLimitMs`: Minimum milliseconds between API calls
 
-##### `fetchPairInfo(chain: string, pairAddress: string): Promise<PairInfo>`
+##### `fetchPairInfo(chain: string, tokenAddress: string): Promise<PairInfo>`
 Fetches current price and volume data for a trading pair.
 
 **Parameters:**
 - `chain`: Blockchain identifier
-- `pairAddress`: Trading pair address
+- `tokenAddress`: Trading pair address
 
 **Returns:** `Promise<PairInfo>` - Current pair information
 
@@ -177,7 +177,7 @@ Fetches current price and volume data for a trading pair.
 ```typescript
 interface PairInfo {
   chainId: string;
-  pairAddress: string;
+  tokenAddress: string;
   baseToken: {
     address: string;
     name: string;
@@ -227,8 +227,8 @@ Batch fetch multiple pairs in a single request (when supported).
 **Example:**
 ```typescript
 const pairs = await dexScreener.fetchMultiplePairs([
-  { chain: "solana", pairAddress: "addr1" },
-  { chain: "solana", pairAddress: "addr2" }
+  { chain: "solana", tokenAddress: "addr1" },
+  { chain: "solana", tokenAddress: "addr2" }
 ]);
 ```
 
@@ -245,7 +245,7 @@ Checks if the DexScreener API is accessible.
 
 ##### `constructor(db: DatabaseService, dexScreener: DexScreenerService, rollingWindow: RollingWindowManager)`
 
-##### `addCoin(symbol: string, chain: string, pairAddress: string, config?: Partial<TriggerConfig>): Promise<void>`
+##### `addCoin(symbol: string, chain: string, tokenAddress: string, config?: Partial<TriggerConfig>): Promise<void>`
 Adds a coin to long list monitoring with optional configuration.
 
 **Example:**
@@ -329,7 +329,7 @@ await longList.toggleTrigger('retrace', false);
 
 #### Core Methods
 
-##### `addEntry(symbol: string, chain: string, pairAddress: string, anchorPrice: number, options: HotEntryOptions): Promise<void>`
+##### `addEntry(symbol: string, chain: string, tokenAddress: string, anchorPrice: number, options: HotEntryOptions): Promise<void>`
 Adds a coin to hot list for quick percentage-based alerts.
 
 **Example:**
@@ -474,7 +474,7 @@ interface JobOptions {
 const jobId = await jobQueue.addJob('backfill_coin', {
   coinId: 123,
   chain: 'solana',
-  pairAddress: '5P8g...'
+  tokenAddress: '5P8g...'
 }, {
   priority: 5,
   maxAttempts: 3

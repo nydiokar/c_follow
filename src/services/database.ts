@@ -14,15 +14,15 @@ export class DatabaseService {
     logger.info('DatabaseService initialized');
   }
 
-  async addCoinToLongList(symbol: string, chain: string, pairAddress: string, name?: string): Promise<number> {
+  async addCoinToLongList(symbol: string, chain: string, tokenAddress: string, name?: string): Promise<number> {
     const now = Math.floor(Date.now() / 1000);
 
     const result = await this.prisma.$transaction(async (tx: PrismaTransactionClient) => {
       const coin = await tx.coin.upsert({
         where: {
-          chain_pairAddress: {
+          chain_tokenAddress: {
             chain,
-            pairAddress
+            tokenAddress
           }
         },
         update: {
@@ -32,7 +32,7 @@ export class DatabaseService {
         },
         create: {
           chain,
-          pairAddress,
+          tokenAddress,
           symbol,
           name: name || null,
           isActive: true
@@ -87,7 +87,7 @@ export class DatabaseService {
   async getLongListCoins(): Promise<Array<{
     coinId: number;
     chain: string;
-    pairAddress: string;
+    tokenAddress: string;
     symbol: string;
     name?: string;
     config: {
@@ -118,7 +118,7 @@ export class DatabaseService {
     return result.map((coin: any): CoinData => ({
       coinId: coin.coinId,
       chain: coin.chain,
-      pairAddress: coin.pairAddress,
+      tokenAddress: coin.tokenAddress,
       symbol: coin.symbol,
       name: coin.name || undefined,
       config: {

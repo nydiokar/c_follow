@@ -238,18 +238,18 @@ The system uses Prisma ORM for type-safe database operations:
 
 ```typescript
 // Example database operation
-async addCoin(chain: string, pairAddress: string, symbol: string): Promise<Coin> {
+async addCoin(chain: string, tokenAddress: string, symbol: string): Promise<Coin> {
   try {
     return await this.prisma.coin.create({
       data: {
         chain,
-        pairAddress,
+        tokenAddress,
         symbol,
         isActive: true
       }
     });
   } catch (error) {
-    throw new DatabaseError('Failed to create coin', { chain, pairAddress, symbol });
+    throw new DatabaseError('Failed to create coin', { chain, tokenAddress, symbol });
   }
 }
 ```

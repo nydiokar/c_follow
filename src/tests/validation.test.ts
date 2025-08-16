@@ -7,7 +7,7 @@ describe('Data Validation', () => {
   describe('validatePairData', () => {
     const validPairInfo: PairInfo = {
       chainId: 'solana',
-      pairAddress: '0x123',
+      tokenAddress: '0x123',
       symbol: 'TEST',
       name: 'Test Token',
       price: 1.50,
@@ -58,7 +58,7 @@ describe('Data Validation', () => {
       const data = [
         {
           chainId: 'solana',
-          pairAddress: '0x123',
+          tokenAddress: '0x123',
           symbol: 'VALID',
           name: 'Valid Token',
           price: 1.50,
@@ -70,7 +70,7 @@ describe('Data Validation', () => {
         },
         {
           chainId: 'solana',
-          pairAddress: '0x456',
+          tokenAddress: '0x456',
           symbol: 'INVALID',
           name: 'Invalid Token',
           price: -1, // Invalid price

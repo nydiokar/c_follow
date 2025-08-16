@@ -2,7 +2,7 @@ export interface DexScreenerPair {
   chainId: string;
   dexId: string;
   url: string;
-  pairAddress: string;
+  tokenAddress: string;
   labels?: string[];
   baseToken: {
     address: string;
@@ -73,7 +73,8 @@ export interface DexScreenerSearchResponse {
 
 export interface PairInfo {
   chainId: string;
-  pairAddress: string;
+  // Base token contract/mint address (used for lookups when querying by token)
+  tokenAddress: string;
   symbol: string;
   name: string;
   price: number;

@@ -83,8 +83,24 @@ export class Formatters {
 
   static escapeMarkdown(text: string): string {
     if (!text) return '';
+
+    const links: string[] = [];
+    const linkRegex = /\[(.*?)\]\((.*?)\)/g;
+
+    const textWithPlaceholders = text.replace(linkRegex, (match) => {
+        links.push(match);
+        return `__LINK_PLACEHOLDER_${links.length - 1}__`;
+    });
+
     const escapeChars = /[\\`*_[\]()~>#+=|{}.!-]/g;
-    return text.replace(escapeChars, '\\$&');
+    const escapedText = textWithPlaceholders.replace(escapeChars, '\\$&');
+
+    let result = escapedText;
+    links.forEach((link, index) => {
+        result = result.replace(`__LINK_PLACEHOLDER_${index}__`, link);
+    });
+
+    return result;
   }
 
   static createProgressBar(current: number, total: number, length: number = 10): string {

@@ -12,15 +12,11 @@ export interface HotListEntry {
   contractAddress: string;
   chainId: string;
   symbol: string;
-  name?: string | null;
-  imageUrl?: string | null;
-  websites?: Website[];
-  socials?: Social[];
+  name: string;
+  imageUrl?: string;
+  websites: Array<{ label: string, url: string }>;
+  socials: Array<{ label: string, url: string }>;
   addedAtUtc: number;
-  anchorPrice: number;
-  anchorMcap?: number | null;
-  pctTarget?: number | null;
-  mcapTargets?: number[];
   failsafeFired: boolean;
   activeTriggers: HotTrigger[];
 }
@@ -29,6 +25,8 @@ export interface HotTrigger {
   kind: 'pct' | 'mcap';
   value: number;
   fired: boolean;
+  anchorPrice: number;
+  anchorMcap?: number;
 }
 
 export interface HotAlert {

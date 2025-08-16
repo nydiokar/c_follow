@@ -40,7 +40,7 @@ class RateLimiter implements ApiRateLimiter {
 export class DexScreenerService {
   private readonly client: AxiosInstance;
   private readonly rateLimiter: ApiRateLimiter;
-  private readonly baseURL = 'https://api.dexscreener.com/latest';
+  private readonly baseURL = 'https://api.dexscreener.com';
 
   constructor(rateLimitMs: number = 200) {
     this.client = axios.create({
@@ -79,47 +79,57 @@ export class DexScreenerService {
     );
   }
 
-  async getPairsByChain(chainId: string, pairAddresses: string[]): Promise<PairInfo[]> {
-    if (pairAddresses.length === 0) return [];
+  async getPairsByChain(chainId: string, tokenAddresses: string[]): Promise<PairInfo[]> {
+    if (tokenAddresses.length === 0) return [];
     
-    const addressParam = pairAddresses.join(',');
-    const url = `/dex/pairs/${chainId}/${addressParam}`;
+    const addressParam = tokenAddresses.join(',');
+    // We query by token contract addresses using DexScreener token endpoint
+    const url = `/tokens/v1/${chainId}/${addressParam}`;
     
     try {
+      
+      
+      logger.info(`Fetching pairs for chain ${chainId}`, { addresses: addressParam });
       const response: AxiosResponse<DexScreenerResponse> = await this.client.get(url);
       
-      if (!response.data.pairs) {
+      // The /tokens/v1 endpoint returns an array of pairs directly
+      const pairs = Array.isArray(response.data) ? response.data : (response.data as any)?.pairs;
+      
+      if (!pairs || pairs.length === 0) {
         logger.warn(`No pairs returned for chain ${chainId}, addresses: ${addressParam}`);
         return [];
       }
 
-      return response.data.pairs.map(pair => this.transformPairData(pair));
+      
+      logger.debug(`Received ${pairs.length} pairs from API`, { pairs: pairs });
+      return pairs.map((pair: DexScreenerPair) => this.transformPairData(pair));
     } catch (error) {
-      logger.error(`Failed to fetch pairs for chain ${chainId}:`, error);
+      logger.error(`Failed to fetch pairs for chain ${chainId}:`, { error, addresses: addressParam });
       throw new Error(`Failed to fetch pair data: ${error}`);
     }
   }
 
   async searchPairs(query: string): Promise<PairInfo[]> {
-    const url = `/dex/search/?q=${encodeURIComponent(query)}`;
-    
     try {
-      const response: AxiosResponse<DexScreenerSearchResponse> = await this.client.get(url);
-      
-      if (!response.data.pairs) {
+      this.rateLimiter.recordRequest();
+      const response: AxiosResponse<DexScreenerSearchResponse> = await this.client.get(`/dex/search/?q=${encodeURIComponent(query)}`);
+      const pairs = response.data.pairs;
+      logger.info(`Found ${pairs?.length || 0} pairs for query "${query}"`, { query });
+
+      if (!pairs) {
         logger.info(`No pairs found for query: ${query}`);
         return [];
       }
 
-      return response.data.pairs.map(pair => this.transformPairData(pair));
+      return response.data.pairs?.map(pair => this.transformPairData(pair)) || [];
     } catch (error) {
       logger.error(`Failed to search pairs for query ${query}:`, error);
       throw new Error(`Failed to search pairs: ${error}`);
     }
   }
 
-  async getPairInfo(chainId: string, pairAddress: string): Promise<PairInfo | null> {
-    const pairs = await this.getPairsByChain(chainId, [pairAddress]);
+  async getPairInfo(chainId: string, tokenAddress: string): Promise<PairInfo | null> {
+    const pairs = await this.getPairsByChain(chainId, [tokenAddress]);
     return pairs.length > 0 && pairs[0] ? pairs[0] : null;
   }
 
@@ -131,12 +141,12 @@ export class DexScreenerService {
     const liquidity = pair.liquidity?.usd || null;
 
     if (price <= 0) {
-      logger.warn(`Invalid price for pair ${pair.pairAddress}: ${price}`);
+      logger.warn(`Invalid price for pair ${pair.tokenAddress}: ${price}`);
     }
 
     return {
       chainId: pair.chainId,
-      pairAddress: pair.pairAddress,
+      tokenAddress: pair.baseToken.address,
       symbol: pair.baseToken.symbol,
       name: pair.baseToken.name,
       price,
@@ -144,7 +154,7 @@ export class DexScreenerService {
       volume24h,
       priceChange24h,
       liquidity,
-      info: pair.info, // Pass the whole info object
+      info: pair.info,
       lastUpdated: Date.now()
     };
   }
@@ -169,29 +179,45 @@ export class DexScreenerService {
     return true;
   }
 
-  async batchGetPairs(requests: Array<{ chainId: string; pairAddress: string }>): Promise<Map<string, PairInfo | null>> {
+  async batchGetTokens(requests: Array<{ chainId: string; tokenAddress: string }>): Promise<Map<string, PairInfo | null>> {
+    // tokenAddress here is actually the token contract/mint address used to add entries
     const results = new Map<string, PairInfo | null>();
     const chainGroups = new Map<string, string[]>();
-    
+
     for (const req of requests) {
       const addresses = chainGroups.get(req.chainId) || [];
-      addresses.push(req.pairAddress);
+      addresses.push(req.tokenAddress);
       chainGroups.set(req.chainId, addresses);
     }
 
-    for (const [chainId, addresses] of chainGroups) {
+    for (const [chainId, tokenAddresses] of chainGroups) {
       try {
-        const pairs = await this.getPairsByChain(chainId, addresses);
-        const pairMap = new Map(pairs.map(p => [p.pairAddress, p]));
-        
-        for (const address of addresses) {
-          const key = `${chainId}:${address}`;
-          results.set(key, pairMap.get(address) || null);
+        const pairs = await this.getPairsByChain(chainId, tokenAddresses);
+
+        // Build selection per token address: choose best pair by liquidity, then 24h volume
+        const bestByToken = new Map<string, PairInfo>();
+        for (const p of pairs) {
+          const key = p.tokenAddress;
+          const existing = bestByToken.get(key);
+          if (!existing) {
+            bestByToken.set(key, p);
+            continue;
+          }
+          const existingScore = (existing.liquidity || 0) * 1_000_000 + existing.volume24h;
+          const newScore = (p.liquidity || 0) * 1_000_000 + p.volume24h;
+          if (newScore > existingScore) {
+            bestByToken.set(key, p);
+          }
+        }
+
+        for (const tokenAddr of tokenAddresses) {
+          const key = `${chainId}:${tokenAddr}`;
+          results.set(key, bestByToken.get(tokenAddr) || null);
         }
       } catch (error) {
         logger.error(`Failed to fetch batch for chain ${chainId}:`, error);
-        for (const address of addresses) {
-          const key = `${chainId}:${address}`;
+        for (const tokenAddr of tokenAddresses) {
+          const key = `${chainId}:${tokenAddr}`;
           results.set(key, null);
         }
       }

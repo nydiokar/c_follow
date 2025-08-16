@@ -8,6 +8,7 @@ import { MessageSender, OutboxMessage } from '../types/telegram';
 import { logger } from '../utils/logger';
 import { PrismaClient } from '@prisma/client';
 import { Formatters } from '../utils/formatters';
+import { DatabaseManager } from '../utils/database';
 
 export class TelegramService implements MessageSender {
   private bot: Telegraf<Context<Update>>;
@@ -32,7 +33,7 @@ export class TelegramService implements MessageSender {
     this.longList = longList;
     this.hotList = hotList;
     this.dexScreener = dexScreener;
-    this.prisma = new PrismaClient();
+    this.prisma = DatabaseManager.getInstance();
 
     this.setupCommands();
     this.registerEventHandlers();
@@ -47,7 +48,7 @@ export class TelegramService implements MessageSender {
     this.bot.command('long_set', this.handleLongSetCommand.bind(this));
     this.bot.command('report_now', this.handleReportNowCommand.bind(this));
     this.bot.command('hot_add', this.handleHotAddCommand.bind(this));
-    this.bot.command('hot_remove', this.handleHotRemoveCommand.bind(this));
+    this.bot.command('hot_rm', this.handleHotRemoveCommand.bind(this));
     this.bot.command('hot_list', this.handleHotListCommand.bind(this));
     this.bot.command('list', this.handleHotListCommand.bind(this));
     this.bot.command('alerts', this.handleAlertsCommand.bind(this));
@@ -57,7 +58,7 @@ export class TelegramService implements MessageSender {
   private registerEventHandlers(): void {
     // Add message handler to debug incoming messages
     this.bot.on('message', (ctx) => {
-      logger.info('Received message:', ctx.message);
+      // logger.info('Received message:', ctx.message);
     });
     
     this.bot.catch((error: unknown) => {
@@ -73,7 +74,6 @@ export class TelegramService implements MessageSender {
   }
 
   private async handleHelpCommand(ctx: Context<Update>): Promise<void> {
-    logger.info('Received /help command');
     await this.handleHelp(ctx.message as Message);
   }
 
@@ -113,22 +113,46 @@ export class TelegramService implements MessageSender {
 
   private async handleHotRemoveCommand(ctx: Context<Update>): Promise<void> {
     const text = (ctx.message as any)?.text || '';
-    const match = text.match(/^\/hot_remove\s*(.*)/);
+    const match = text.match(/^\/hot_rm\s*(.*)/);
     await this.handleHotRemove(ctx.message as Message, match);
   }
 
   private async handleHotListCommand(ctx: Context<Update>): Promise<void> {
-    logger.info('Received /hot_list command');
     await this.handleHotList(ctx.message as Message);
   }
 
   private async handleAlertsCommand(ctx: Context<Update>): Promise<void> {
-    logger.info('Received /alerts command');
     await this.handleAlerts(ctx.message as Message);
   }
 
   private async handleStatusCommand(ctx: Context<Update>): Promise<void> {
     await this.handleStatus(ctx.message as Message);
+  }
+
+  private async sendPaginatedMessage(chatId: string, text: string, parseMode?: 'MarkdownV2' | 'HTML') {
+    const MAX_LENGTH = 4096;
+    if (text.length <= MAX_LENGTH) {
+      await this.sendMessage(chatId, text, parseMode, undefined, true);
+      return;
+    }
+
+    const messages = [];
+    let currentMessage = '';
+
+    const lines = text.split('\n');
+    for (const line of lines) {
+      if (currentMessage.length + line.length + 1 > MAX_LENGTH) {
+        messages.push(currentMessage);
+        currentMessage = '';
+      }
+      currentMessage += line + '\n';
+    }
+    messages.push(currentMessage);
+
+    for (const msg of messages) {
+      await this.sendMessage(chatId, msg, parseMode, undefined, true);
+      await new Promise(resolve => setTimeout(resolve, 300)); // Avoid rate limiting
+    }
   }
 
   private async handleStart(msg: Message): Promise<void> {
@@ -357,7 +381,7 @@ Use /help to see all available commands.
         const price = coin.price < 1 ? coin.price.toFixed(6) : coin.price.toFixed(4);
         const change24h = coin.change24h >= 0 ? `+${coin.change24h.toFixed(1)}` : coin.change24h.toFixed(1);
         const retrace = coin.retraceFrom72hHigh.toFixed(1);
-        const volume = this.formatVolume(coin.volume24h);
+        const volume = Formatters.formatVolume(coin.volume24h);
         
         report += `\`${coin.symbol.padEnd(8)} ${price.padStart(8)} ${change24h.padStart(7)}% ${retrace.padStart(6)}% ${volume.padStart(10)}\`\n`;
       }
@@ -422,7 +446,7 @@ Use /help to see all available commands.
 
     try {
       // Parse trigger parameters
-      const options: any = {};
+      const options: { pctTargets?: number[], mcapTargets?: number[] } = {};
       let hasValidTrigger = false;
       
       for (const param of params) {
@@ -432,7 +456,10 @@ Use /help to see all available commands.
           if (percentageMatch && percentageMatch[1]) {
             const pctValue = parseFloat(percentageMatch[1]);
             if (!isNaN(pctValue)) {
-              options.pctTarget = pctValue;
+              if (!options.pctTargets) {
+                options.pctTargets = [];
+              }
+              options.pctTargets.push(pctValue);
               hasValidTrigger = true;
               continue;
             }
@@ -485,7 +512,10 @@ Use /help to see all available commands.
             return;
           }
           
-          options.mcapTargets = [mcapValue];
+          if (!options.mcapTargets) {
+            options.mcapTargets = [];
+          }
+          options.mcapTargets.push(mcapValue);
           hasValidTrigger = true;
         } else {
           // Unknown parameter
@@ -511,15 +541,18 @@ Use /help to see all available commands.
         return;
       }
 
-      // Fetch token data from DexScreener
-      const pairs = await this.dexScreener.searchPairs(contractAddress);
+      // Fetch token data from DexScreener by contract address first
+      let pair = await this.dexScreener.getPairInfo('solana', contractAddress);
       
-      if (!pairs || pairs.length === 0) {
-        await this.sendMessage(msg.chat.id.toString(), `❌ *Token not found*\n\nNo trading pairs found for contract: \`${contractAddress}\``, 'MarkdownV2');
-        return;
+      // Fallback: try generic search if direct token lookup fails
+      if (!pair) {
+        const pairs = await this.dexScreener.searchPairs(contractAddress);
+        if (!pairs || pairs.length === 0) {
+          await this.sendMessage(msg.chat.id.toString(), `❌ *Token not found*\n\nNo trading pairs found for contract: \`${contractAddress}\``, 'MarkdownV2');
+          return;
+        }
+        pair = pairs[0] || null;
       }
-
-      const pair = pairs[0];
       if (!pair) {
         await this.sendMessage(msg.chat.id.toString(), `❌ *Error*\n\nFailed to get token data for contract: \`${contractAddress}\``, 'MarkdownV2');
         return;
@@ -530,26 +563,48 @@ Use /help to see all available commands.
 
       // Show confirmation with actual token data
       let message = `✅ *Token Added to Hot List*\n\n`;
-      message += `CA: \`${contractAddress}\`\n\n`;
-      
+
       const website = pair.info?.websites?.find((w: { url: string }) => w.url)?.url;
-      if (website) {
-        message += `[${pair.name} (${pair.symbol})](${website})\n`;
-      } else {
-        message += `${pair.name} (${pair.symbol})\n`;
+      const socials = pair.info?.socials;
+      
+      message += `${pair.name} (${pair.symbol})\n`;
+      message += `\`${contractAddress}\`\n\n`;
+      
+      let socialLinks = '';
+      if (socials) {
+        const twitter = socials.find(s => s.platform === 'twitter');
+        const telegram = socials.find(s => s.platform === 'telegram');
+        
+        if (website) socialLinks += `🌐(${website}) | `;
+        if (twitter) socialLinks += `🐦(${`https://twitter.com/${twitter.handle}`}) | `;
+        if (telegram) socialLinks += `✈️(${`https://t.me/${telegram.handle}`})`;
+        
+        // Remove trailing ' | '
+        if (socialLinks.endsWith(' | ')) {
+          socialLinks = socialLinks.slice(0, -3);
+        }
+      }
+      
+      if (socialLinks) {
+        message += `${socialLinks}\n\n`;
       }
       
       message += `💰 Price: $${this.formatPrice(pair.price)}\n`;
-      message += `📊 Market Cap: ${this.formatMarketCap(pair.marketCap || 0)}\n\n`;
+      message += `📊 Market Cap: ${Formatters.formatMarketCap(pair.marketCap || 0)}\n`;
 
-      if (options.pctTarget) {
-        const currentPrice = pair.price;
-        const targetPrice = currentPrice * (1 + options.pctTarget / 100);
-        message += `📈 Target: $${this.formatPrice(targetPrice)} (${options.pctTarget > 0 ? '+' : ''}${options.pctTarget}%)\n`;
+      if (options.pctTargets && options.pctTargets.length > 0) {
+        message += `\n📈 Targets:\n`;
+        for (const pctTarget of options.pctTargets) {
+          const targetPrice = pair.price * (1 + pctTarget / 100);
+          message += `   - $${this.formatPrice(targetPrice)} (${pctTarget > 0 ? '+' : ''}${pctTarget}%)\n`;
+        }
       }
       
-      if (options.mcapTargets) {
-        message += `🎯 MCAP Target: ${this.formatMarketCap(options.mcapTargets[0])}\n`;
+      if (options.mcapTargets && options.mcapTargets.length > 0) {
+        message += `\n🎯 MCAP Targets:\n`;
+        for (const mcapTarget of options.mcapTargets) {
+          message += `   - ${Formatters.formatMarketCap(mcapTarget)}\n`;
+        }
       }
       
        try {
@@ -617,39 +672,38 @@ Use /help to see all available commands.
   }
 
   private async handleHotList(msg: Message): Promise<void> {
-    logger.info('Received /hot_list command');
     try {
       const entries = await this.hotList.listEntries();
       
       if (entries.length === 0) {
-        await this.sendMessage(msg.chat.id.toString(), 'No coins in hot list', 'MarkdownV2');
+        await this.sendMessage(
+          msg.chat.id.toString(), 
+          '🔥 *Hot list is empty*\\!\\!\n\nUse `/hot_add` to add a token with price or market cap targets\\.', 
+          'MarkdownV2'
+        );
         return;
       }
 
       let message = `🔥 Hot List Entries\n\n`;
       
       for (const entry of entries) {
-        const addedDate = new Date(entry.addedAtUtc * 1000).toLocaleDateString();
-        message += `${entry.symbol}\n`;
-        message += `Anchor: $${this.formatPrice(entry.anchorPrice)} (${addedDate})\n`;
+        message += `*${entry.name} (${entry.symbol})*\n`;
+        message += `\`${entry.contractAddress}\`\n`;
         
-        if (entry.pctTarget) {
-          const status = entry.activeTriggers.find(t => t.kind === 'pct')?.fired ? '✅' : '⏳';
-          const targetPrice = entry.anchorPrice * (1 + entry.pctTarget / 100);
-          message += `${status} Target: ${entry.pctTarget > 0 ? '+' : ''}${entry.pctTarget}% ($${this.formatPrice(targetPrice)})\n`;
-        }
-        
-        if (entry.mcapTargets && entry.mcapTargets.length > 0) {
-          for (const target of entry.mcapTargets) {
-            const status = entry.activeTriggers.find(t => t.kind === 'mcap' && t.value === target)?.fired ? '✅' : '⏳';
-            message += `${status} MCAP: ${this.formatMarketCap(target)}\n`;
+        for (const trigger of entry.activeTriggers) {
+          const status = trigger.fired ? '✅' : '⏳';
+          if (trigger.kind === 'pct') {
+            const targetPrice = trigger.anchorPrice * (1 + trigger.value / 100);
+            message += `${status} Target: ${trigger.value > 0 ? '+' : ''}${trigger.value}% ($${this.formatPrice(targetPrice)})\n`;
+          } else if (trigger.kind === 'mcap') {
+            message += `${status} MCAP: ${Formatters.formatMarketCap(trigger.value)}\n`;
           }
         }
         
         message += `${entry.failsafeFired ? '🚨' : '🛡️'} Failsafe: ${entry.failsafeFired ? 'FIRED' : 'Active'}\n\n`;
       }
 
-      await this.sendMessage(msg.chat.id.toString(), message, 'MarkdownV2');
+      await this.sendPaginatedMessage(msg.chat.id.toString(), message, 'MarkdownV2');
     } catch (error) {
       await this.sendMessage(
         msg.chat.id.toString(), 
@@ -679,7 +733,6 @@ Use /help to see all available commands.
   }
 
   private async handleAlerts(msg: Message): Promise<void> {
-    logger.info('Received /alerts command');
     try {
       const alerts = await this.db.getAllRecentAlerts(20);
       
@@ -728,7 +781,7 @@ Use /help to see all available commands.
     }
   }
 
-  async sendMessage(chatId: string, text: string, parseMode?: 'MarkdownV2' | 'HTML', fingerprint?: string): Promise<boolean> {
+  async sendMessage(chatId: string, text: string, parseMode?: 'MarkdownV2' | 'HTML', fingerprint?: string, disablePreview: boolean = false): Promise<boolean> {
     try {
       logger.info(`Attempting to send message to ${chatId}, parseMode: ${parseMode}, text length: ${text.length}`);
       
@@ -743,7 +796,9 @@ Use /help to see all available commands.
         }
       }
 
-      const options: any = {};
+      const options: any = {
+        disable_web_page_preview: disablePreview
+      };
       let processedText = text;
 
       if (parseMode === 'MarkdownV2') {
@@ -818,16 +873,19 @@ Use /help to see all available commands.
     message += `${trigger.message}\n`;
     message += `Price: $${trigger.price.toFixed(6)}\n`;
     message += `24h Change: ${trigger.priceChange24h >= 0 ? '+' : ''}${trigger.priceChange24h.toFixed(1)}%\n`;
-    message += `Volume: ${this.formatVolume(trigger.volume24h)}`;
+    message += `Volume: ${Formatters.formatVolume(trigger.volume24h)}`;
     
     if (trigger.marketCap) {
-      message += `\nMarket Cap: ${this.formatMarketCap(trigger.marketCap)}`;
+      message += `\nMarket Cap: ${Formatters.formatMarketCap(trigger.marketCap)}`;
     }
 
     await this.sendMessage(this.chatId, message, 'MarkdownV2', fingerprint);
   }
 
   async sendHotAlert(alert: any): Promise<void> {
+    if (alert.alertType === 'entry_added') {
+      return;
+    }
     const fingerprint = `hot_${alert.hotId}_${alert.alertType}_${alert.timestamp}`;
     
     let message = `🔥 *HOT ALERT*\n\n`;
@@ -836,7 +894,7 @@ Use /help to see all available commands.
     message += `Change: ${alert.deltaFromAnchor >= 0 ? '+' : ''}${alert.deltaFromAnchor.toFixed(1)}%`;
     
     if (alert.currentMcap) {
-      message += `\nMarket Cap: ${this.formatMarketCap(alert.currentMcap)}`;
+      message += `\nMarket Cap: ${Formatters.formatMarketCap(alert.currentMcap)}`;
     }
 
     await this.sendMessage(this.chatId, message, 'MarkdownV2', fingerprint);
@@ -867,7 +925,6 @@ Use /help to see all available commands.
 
   async stop(): Promise<void> {
     this.bot.stop();
-    await this.prisma.$disconnect();
     logger.info('Telegram bot stopped');
   }
 
@@ -914,10 +971,7 @@ Use /help to see all available commands.
         logger.warn('Failed to send startup message:', testError);
       }
       
-      setInterval(() => {
-        logger.info('Telegram bot alive check');
-      }, 30000); // Every 30 seconds
-      
+
     } catch (error) {
       logger.error('Failed to start Telegram bot:', error);
       throw error;
