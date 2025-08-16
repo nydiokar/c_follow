@@ -22,6 +22,7 @@ dotenv.config();
 interface AppConfig {
   telegramBotToken: string;
   telegramChatId: string;
+  telegramGroupChatId: string | undefined;
   databaseUrl: string;
   timezone: string;
   rateLimitMs: number;
@@ -65,6 +66,7 @@ class FollowCoinBot {
     const config = {
       telegramBotToken: process.env.TELEGRAM_BOT_TOKEN!,
       telegramChatId: process.env.TELEGRAM_CHAT_ID!,
+      telegramGroupChatId: process.env.TELEGRAM_GROUP_CHAT_ID || undefined,
       databaseUrl: process.env.DATABASE_URL!,
       timezone: process.env.TIMEZONE || 'UTC',
       rateLimitMs: parseInt(process.env.DEXSCREENER_RATE_LIMIT_MS || '200'),
@@ -109,6 +111,26 @@ class FollowCoinBot {
       await this.startServices();
 
       logger.info('Follow Coin Bot started successfully');
+      
+      // Log chat configuration
+      logger.info('Chat Configuration:', {
+        adminChatId: this.config.telegramChatId,
+        groupChatId: this.config.telegramGroupChatId || 'Not configured',
+        healthAlerts: 'Admin chat only',
+        tradingAlerts: this.config.telegramGroupChatId ? 'Group chat' : 'Admin chat'
+      });
+
+      // Send startup message to group if configured
+      if (this.config.telegramGroupChatId) {
+        await this.telegram.sendMessage(
+          this.config.telegramGroupChatId,
+          '🚀 **Follow Coin Bot is now online!**\n\n' +
+          '✅ Health monitoring active\n' +
+          '✅ Trading alerts enabled\n' +
+          '✅ Commands ready\n\n' +
+          'Use /help to see available commands'
+        );
+      }
 
       if (this.config.nodeEnv === 'development') {
         this.startHealthCheck();
@@ -151,6 +173,7 @@ class FollowCoinBot {
     this.telegram = new TelegramService(
       this.config.telegramBotToken,
       this.config.telegramChatId,
+      this.config.telegramGroupChatId,
       this.db,
       this.longList,
       this.hotList,
@@ -163,7 +186,7 @@ class FollowCoinBot {
       throw error;
     }
 
-    // Subscribe to alert events
+    // Subscribe to alert events - use existing TelegramService methods
     globalAlertBus.subscribe({
       id: 'telegram_sender',
       handler: async (event) => {
@@ -296,7 +319,7 @@ class FollowCoinBot {
         `**PID**: ${process.pid}`;
 
       await this.telegram.sendMessage(this.config.telegramChatId, alertMessage);
-      logger.warn(`Health alert sent: ${message}`);
+      logger.warn(`Health alert sent to admin chat: ${message}`);
     } catch (error) {
       logger.error('Failed to send health alert:', error);
     }

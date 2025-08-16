@@ -17,18 +17,21 @@ export class TelegramService implements MessageSender {
   private hotList: HotListService;
   private dexScreener: DexScreenerService;
   private prisma: PrismaClient;
-  private chatId: string;
+  private adminChatId: string;
+  private groupChatId: string | null = null;
 
   constructor(
     token: string, 
-    chatId: string,
+    adminChatId: string,
+    groupChatId: string | undefined,
     db: DatabaseService,
     longList: LongListService,
     hotList: HotListService,
     dexScreener: DexScreenerService
   ) {
     this.bot = new Telegraf(token);
-    this.chatId = chatId;
+    this.adminChatId = adminChatId;
+    this.groupChatId = groupChatId || null;
     this.db = db;
     this.longList = longList;
     this.hotList = hotList;
@@ -909,7 +912,9 @@ Use /help to see all available commands.
       message += `\nMarket Cap: ${Formatters.formatMarketCap(trigger.marketCap)}`;
     }
 
-    await this.sendMessage(this.chatId, message, 'MarkdownV2', fingerprint);
+    // Send to group chat if available, otherwise to admin
+    const targetChatId = this.groupChatId || this.adminChatId;
+    await this.sendMessage(targetChatId, message, 'MarkdownV2', fingerprint);
   }
 
   async sendHotAlert(alert: any): Promise<void> {
@@ -927,7 +932,9 @@ Use /help to see all available commands.
       message += `\nMarket Cap: ${Formatters.formatMarketCap(alert.currentMcap)}`;
     }
 
-    await this.sendMessage(this.chatId, message, 'MarkdownV2', fingerprint);
+    // Send to group chat if available, otherwise to admin
+    const targetChatId = this.groupChatId || this.adminChatId;
+    await this.sendMessage(targetChatId, message, 'MarkdownV2', fingerprint);
   }
 
   private formatVolume(volume: number): string {
@@ -996,7 +1003,7 @@ Use /help to see all available commands.
       
       // Send startup message
       try {
-        await this.bot.telegram.sendMessage(this.chatId, '🚀 Bot started successfully!');
+        await this.bot.telegram.sendMessage(this.adminChatId, '🚀 Bot started successfully!');
       } catch (testError) {
         logger.warn('Failed to send startup message:', testError);
       }
