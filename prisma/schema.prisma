@@ -1,0 +1,181 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Coin {
+  coinId      Int     @id @default(autoincrement()) @map("coin_id")
+  chain       String
+  pairAddress String  @map("pair_address")
+  symbol      String
+  name        String?
+  decimals    Int?
+  isActive    Boolean @default(true) @map("is_active")
+
+  longWatch    LongWatch?
+  longState    LongState?
+  alertHistory     AlertHistory[]
+  symbolAliases    SymbolAlias[]
+  rollingDataPoints RollingDataPoint[]
+
+  @@unique([chain, pairAddress])
+  @@index([symbol])
+  @@index([isActive])
+  @@map("coin")
+}
+
+model LongWatch {
+  coinId       Int     @id @map("coin_id")
+  addedAtUtc   Int     @map("added_at_utc")
+  retraceOn    Boolean @default(true) @map("retrace_on")
+  stallOn      Boolean @default(true) @map("stall_on")
+  breakoutOn   Boolean @default(true) @map("breakout_on")
+  mcapOn       Boolean @default(false) @map("mcap_on")
+  retracePct   Float   @default(15.0) @map("retrace_pct")
+  stallVolPct  Float   @default(30.0) @map("stall_vol_pct")
+  stallBandPct Float   @default(5.0) @map("stall_band_pct")
+  breakoutPct  Float   @default(12.0) @map("breakout_pct")
+  breakoutVolX Float   @default(1.5) @map("breakout_vol_x")
+  mcapLevels   String? @map("mcap_levels")
+  notes        String?
+
+  coin Coin @relation(fields: [coinId], references: [coinId], onDelete: Cascade)
+
+  @@map("long_watch")
+}
+
+model LongState {
+  coinId               Int   @id @map("coin_id")
+  h12High              Float? @map("h12_high")
+  h24High              Float? @map("h24_high")
+  h72High              Float? @map("h72_high")
+  h12Low               Float? @map("h12_low")
+  h24Low               Float? @map("h24_low")
+  h72Low               Float? @map("h72_low")
+  v12Sum               Float? @map("v12_sum")
+  v24Sum               Float? @map("v24_sum")
+  lastPrice            Float? @map("last_price")
+  lastMcap             Float? @map("last_mcap")
+  lastUpdatedUtc       Int   @map("last_updated_utc")
+  lastRetraceFireUtc   Int?  @map("last_retrace_fire_utc")
+  lastStallFireUtc     Int?  @map("last_stall_fire_utc")
+  lastBreakoutFireUtc  Int?  @map("last_breakout_fire_utc")
+  lastMcapFireUtc      Int?  @map("last_mcap_fire_utc")
+
+  coin Coin @relation(fields: [coinId], references: [coinId], onDelete: Cascade)
+
+  @@index([lastUpdatedUtc])
+  @@map("long_state")
+}
+
+model HotEntry {
+  hotId           Int     @id @default(autoincrement()) @map("hot_id")
+  contractAddress String  @unique @map("contract_address")
+  chainId         String  @map("chain_id")
+  symbol          String
+  name            String?
+  imageUrl        String? @map("image_url")
+  websitesJson    String? @map("websites_json")
+  socialsJson     String? @map("socials_json")
+  addedAtUtc      Int     @map("added_at_utc")
+  anchorPrice     Float   @map("anchor_price")
+  anchorMcap      Float?  @map("anchor_mcap")
+  pctTarget       Float?  @map("pct_target")
+  mcapTargets     String? @map("mcap_targets")
+  failsafeFired   Boolean @default(false) @map("failsafe_fired")
+
+  triggerStates HotTriggerState[]
+  alertHistory  AlertHistory[]
+
+  @@index([symbol])
+  @@map("hot_entry")
+}
+
+model HotTriggerState {
+  hotId     Int     @map("hot_id")
+  trigKind  String  @map("trig_kind")
+  trigValue Float   @map("trig_value")
+  fired     Boolean @default(false)
+
+  hotEntry HotEntry @relation(fields: [hotId], references: [hotId], onDelete: Cascade)
+
+  @@id([hotId, trigKind, trigValue])
+  @@map("hot_trigger_state")
+}
+
+model AlertHistory {
+  alertId     Int     @id @default(autoincrement()) @map("alert_id")
+  hotId       Int?    @map("hot_id")
+  coinId      Int?    @map("coin_id")
+  tsUtc       Int     @map("ts_utc")
+  kind        String
+  payloadJson String  @map("payload_json")
+  fingerprint String  @unique
+
+  coin     Coin?     @relation(fields: [coinId], references: [coinId], onDelete: Cascade)
+  hotEntry HotEntry? @relation(fields: [hotId], references: [hotId], onDelete: SetNull)
+
+  @@index([coinId, tsUtc])
+  @@index([hotId, tsUtc])
+  @@map("alert_history")
+}
+
+model ScheduleCfg {
+  cfgId                 Int   @id @default(1) @map("cfg_id")
+  anchorTimesLocal      String @map("anchor_times_local")
+  anchorPeriodHours     Int   @default(12) @map("anchor_period_hours")
+  longCheckpointHours   Int   @default(6) @map("long_checkpoint_hours")
+  hotIntervalMinutes    Int   @default(5) @map("hot_interval_minutes")
+  cooldownHours         Float @default(2.0) @map("cooldown_hours")
+  hysteresisPct         Float @default(30.0) @map("hysteresis_pct")
+
+  @@map("schedule_cfg")
+}
+
+model SymbolAlias {
+  alias  String @id
+  coinId Int    @map("coin_id")
+
+  coin Coin @relation(fields: [coinId], references: [coinId], onDelete: Cascade)
+
+  @@map("symbol_alias")
+}
+
+model Outbox {
+  outboxId    Int     @id @default(autoincrement()) @map("outbox_id")
+  tsUtc       Int     @map("ts_utc")
+  chatId      String  @map("chat_id")
+  messageText String  @map("message_text")
+  fingerprint String  @unique
+  sentOk      Boolean @default(false) @map("sent_ok")
+  sentTsUtc   Int?    @map("sent_ts_utc")
+
+  @@index([sentOk, tsUtc])
+  @@map("outbox")
+}
+
+model RollingDataPoint {
+  id        Int     @id @default(autoincrement())
+  coinId    Int     @map("coin_id")
+  timestamp Int
+  price     Float
+  volume    Float
+  marketCap Float?  @map("market_cap")
+
+  coin Coin @relation(fields: [coinId], references: [coinId], onDelete: Cascade)
+
+  @@index([coinId, timestamp])
+  @@map("rolling_data_points")
+}
+
+model Migration {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  executedAt  DateTime @default(now()) @map("executed_at")
+
+  @@map("migrations")
+}
