@@ -67,7 +67,7 @@ class HotListTriggerEvaluator implements HotListEvaluator {
 
   shouldRemoveEntry(entry: HotListEntry): boolean {
     const hasActiveTriggers = entry.activeTriggers.some(t => !t.fired);
-    return !hasActiveTriggers && entry.failsafeFired;
+    return !hasActiveTriggers;
   }
 
   private shouldTriggerFailsafe(trigger: HotTrigger, currentPrice: number, currentMcap?: number): boolean {
@@ -153,7 +153,8 @@ export class HotListService {
             imageUrl: tokenData.info?.imageUrl,
             websitesJson: tokenData.info?.websites ? JSON.stringify(tokenData.info.websites) : null,
             socialsJson: tokenData.info?.socials ? JSON.stringify(tokenData.info.socials) : null,
-            coinId: coin.coinId
+            coinId: coin.coinId,
+            isActive: true
           },
           create: {
             contractAddress: contractAddress,
@@ -309,9 +310,11 @@ export class HotListService {
 
         alerts.push(...entryAlerts);
 
-        if (this.evaluator.shouldRemoveEntry(entry)) {
-          await this.removeEntryById(entry.hotId);
-          logger.info(`Auto-removed hot list entry for ${entry.symbol} (no active triggers + failsafe fired)`);
+        // Re-fetch triggers after updates; deactivate entry when no active triggers remain
+        const refreshed = await this.getEntryById(entry.hotId);
+        if (this.evaluator.shouldRemoveEntry(refreshed)) {
+          await this.deactivateEntry(entry.hotId);
+          logger.info(`Deactivated hot list entry for ${entry.symbol} (all triggers fired)`);
         }
       }
 
@@ -418,8 +421,33 @@ export class HotListService {
   }
 
   private async removeEntryById(hotId: number): Promise<void> {
-    await this.prisma.hotEntry.delete({
-      where: { hotId },
-    });
+    await this.prisma.hotEntry.update({ where: { hotId }, data: { isActive: false } });
+  }
+
+  private async deactivateEntry(hotId: number): Promise<void> {
+    await this.prisma.hotEntry.update({ where: { hotId }, data: { isActive: false } });
+  }
+
+  private async getEntryById(hotId: number): Promise<HotListEntry> {
+    const entry = await this.prisma.hotEntry.findUnique({ where: { hotId }, include: { triggerStates: true } });
+    return {
+      hotId: entry!.hotId,
+      contractAddress: entry!.contractAddress,
+      chainId: entry!.chainId,
+      symbol: entry!.symbol,
+      name: entry!.name || '',
+      imageUrl: entry!.imageUrl || '',
+      websites: entry!.websitesJson ? JSON.parse(entry!.websitesJson) : [],
+      socials: entry!.socialsJson ? JSON.parse(entry!.socialsJson) : [],
+      addedAtUtc: entry!.addedAtUtc,
+      failsafeFired: entry!.failsafeFired,
+      activeTriggers: entry!.triggerStates.map((ts: any) => ({
+        kind: ts.trigKind as 'pct' | 'mcap',
+        value: ts.trigValue,
+        fired: ts.fired,
+        anchorPrice: ts.anchorPrice,
+        anchorMcap: ts.anchorMcap,
+      })),
+    };
   }
 }

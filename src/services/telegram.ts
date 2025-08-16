@@ -49,6 +49,8 @@ export class TelegramService implements MessageSender {
     this.bot.command('report_now', this.handleReportNowCommand.bind(this));
     this.bot.command('hot_add', this.handleHotAddCommand.bind(this));
     this.bot.command('hot_rm', this.handleHotRemoveCommand.bind(this));
+    // Remove a specific hot trigger by hotId and value (e.g., /hot_rm 12 +10%)
+    this.bot.command('hot_rm_trigger', this.handleHotRemoveTriggerCommand.bind(this));
     this.bot.command('hot_list', this.handleHotListCommand.bind(this));
     this.bot.command('list', this.handleHotListCommand.bind(this));
     this.bot.command('alerts', this.handleAlertsCommand.bind(this));
@@ -115,6 +117,34 @@ export class TelegramService implements MessageSender {
     const text = (ctx.message as any)?.text || '';
     const match = text.match(/^\/hot_rm\s*(.*)/);
     await this.handleHotRemove(ctx.message as Message, match);
+  }
+
+  private async handleHotRemoveTriggerCommand(ctx: Context<Update>): Promise<void> {
+    const text = (ctx.message as any)?.text || '';
+    const match = text.match(/^\/hot_rm_trigger\s*(\d+)\s*([+-]?[0-9]+(?:\.[0-9]+)?)%?$/);
+    if (!match) {
+      await this.sendMessage(
+        ctx.chat!.id.toString(),
+        'Usage: /hot_rm_trigger HOT_ID ±PCT\nExample: /hot_rm_trigger 12 +10%','MarkdownV2'
+      );
+      return;
+    }
+    const hotId = parseInt(match[1], 10);
+    const pct = parseFloat(match[2]);
+    try {
+      const prisma = this.prisma;
+      const updated = await prisma.hotTriggerState.update({
+        where: { hotId_trigKind_trigValue: { hotId, trigKind: 'pct', trigValue: pct } },
+        data: { fired: true }
+      });
+      if (updated) {
+        await this.sendMessage(ctx.chat!.id.toString(), `✅ Trigger ${pct > 0 ? '+' : ''}${pct}% for hotId ${hotId} marked as fired.`, 'MarkdownV2');
+      } else {
+        await this.sendMessage(ctx.chat!.id.toString(), `❌ Trigger not found.`, 'MarkdownV2');
+      }
+    } catch (error) {
+      await this.sendMessage(ctx.chat!.id.toString(), `❌ Failed to update trigger: ${error instanceof Error ? error.message : 'Unknown error'}`, 'MarkdownV2');
+    }
   }
 
   private async handleHotListCommand(ctx: Context<Update>): Promise<void> {
