@@ -92,7 +92,7 @@ export class Formatters {
         return `__LINK_PLACEHOLDER_${links.length - 1}__`;
     });
 
-    const escapeChars = /[\\`*_[\]()~>#+=|{}.!-]/g;
+    const escapeChars = /[\\_[\]()~>#+=|{}.!-]/g;
     const escapedText = textWithPlaceholders.replace(escapeChars, '\\$&');
 
     let result = escapedText;

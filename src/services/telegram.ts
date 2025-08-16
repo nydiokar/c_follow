@@ -708,7 +708,7 @@ Use /help to see all available commands.
       if (entries.length === 0) {
         await this.sendMessage(
           msg.chat.id.toString(), 
-          '🔥 *Hot list is empty*\\!\\!\n\nUse `/hot_add` to add a token with price or market cap targets\\.', 
+          '🔥 *Hot list is empty*\\!\n\nUse `/hot_add` to add a token with price or market cap targets\\.', 
           'MarkdownV2'
         );
         return;

@@ -1,6 +1,6 @@
 # Changelog
 
-## [2.0.0] - Enhanced Architecture Release
+## [0.2.0] - Enhanced Architecture Release
 
 ### 🚀 Major Improvements
 
@@ -116,7 +116,7 @@
 1. **Environment Variables**:
    ```bash
    # Add to .env
-   TIMEZONE=Europe/Sofia  # Was defaulting to UTC
+   TIMEZONE=Europe  # Was defaulting to UTC
    ```
 
 2. **Database**:

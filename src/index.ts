@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import express from 'express';
 import { DatabaseManager } from './utils/database';
 import { DatabaseService } from './services/database';
 import { DexScreenerService } from './services/dexscreener';
@@ -216,19 +217,89 @@ class FollowCoinBot {
   }
 
   private startHealthCheck(): void {
-    setInterval(async () => {
-      const stats = {
-        rateLimitStats: this.rateLimiter.getRateLimitStats(),
-        errorStats: globalErrorHandler.getErrorStats(),
-        schedulerRunning: this.scheduler.isSchedulerRunning(),
-        jobQueueStats: globalJobQueue.getStats(),
-        alertBusStats: globalAlertBus.getStats(),
-        healthStatus: await globalHealthCheck.getHealthStatus(),
-        timestamp: new Date().toISOString()
-      };
+    const app = express();
+    const port = parseInt(process.env.HEALTH_CHECK_PORT || '3001');
+    
+    // Health check endpoint
+    app.get('/health', async (req: express.Request, res: express.Response) => {
+      try {
+        const healthStatus = await globalHealthCheck.getHealthStatus();
+        const stats = {
+          status: 'healthy',
+          uptime: process.uptime(),
+          timestamp: new Date().toISOString(),
+          version: process.env.npm_package_version || '1.0.0',
+          environment: this.config.nodeEnv,
+          services: {
+            database: healthStatus.services.database,
+            jobQueue: healthStatus.services.jobQueue,
+            alertBus: healthStatus.services.alertBus,
+            dexscreener: healthStatus.services.dexScreener,
+            telegram: healthStatus.services.telegram,
+            scheduler: this.scheduler.isSchedulerRunning()
+          },
+          metrics: {
+            memoryUsage: process.memoryUsage(),
+            cpuUsage: process.cpuUsage(),
+            rateLimitStats: this.rateLimiter.getRateLimitStats(),
+            errorStats: globalErrorHandler.getErrorStats()
+          }
+        };
+        
+        res.json(stats);
+      } catch (error) {
+        res.status(500).json({
+          status: 'unhealthy',
+          error: error instanceof Error ? error.message : 'Unknown error',
+          timestamp: new Date().toISOString()
+        });
+      }
+    });
 
-      logger.debug('Health check:', stats);
-    }, 60000); // Every minute in development
+    // Status endpoint for monitoring
+    app.get('/status', (_req: express.Request, res: express.Response) => {
+      res.json({
+        status: 'running',
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString(),
+        pid: process.pid
+      });
+    });
+
+    // Start the server
+    app.listen(port, () => {
+      logger.info(`Health check server started on port ${port}`);
+      logger.info(`Health endpoint: http://localhost:${port}/health`);
+      logger.info(`Status endpoint: http://localhost:${port}/status`);
+    });
+
+    // Self-monitoring: Check health every 5 minutes and alert if down
+    setInterval(async () => {
+      try {
+        const response = await fetch(`http://localhost:${port}/health`);
+        if (!response.ok) {
+          await this.sendHealthAlert('Bot health check failed', 'error');
+        }
+      } catch (error) {
+        await this.sendHealthAlert('Bot health check server unreachable', 'critical');
+      }
+    }, 300000); // Every 5 minutes
+  }
+
+  private async sendHealthAlert(message: string, level: 'warning' | 'error' | 'critical'): Promise<void> {
+    try {
+      const alertMessage = `🚨 **Bot Health Alert**\n\n` +
+        `**Level**: ${level.toUpperCase()}\n` +
+        `**Message**: ${message}\n` +
+        `**Time**: ${new Date().toISOString()}\n` +
+        `**Uptime**: ${Math.floor(process.uptime() / 60)} minutes\n` +
+        `**PID**: ${process.pid}`;
+
+      await this.telegram.sendMessage(this.config.telegramChatId, alertMessage);
+      logger.warn(`Health alert sent: ${message}`);
+    } catch (error) {
+      logger.error('Failed to send health alert:', error);
+    }
   }
 
   async gracefulShutdown(exitCode: number): Promise<void> {
