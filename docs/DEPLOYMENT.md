@@ -190,7 +190,7 @@ module.exports = {
 
 ### Built-in Health Check Endpoints
 
-The bot now includes **built-in health monitoring** that runs on port 3001 (configurable):
+The bot now includes **built-in health monitoring** that runs on port 3002 (configurable):
 
 ```bash
 # Health check endpoint
@@ -665,7 +665,7 @@ npm run monitor:start
 
 ```bash
 # Check if health server is running
-netstat -tlnp | grep :3001
+netstat -tlnp | grep :3002
 
 # Check bot logs for health server errors
 pm2 logs follow-coin-bot | grep "health"

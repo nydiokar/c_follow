@@ -8,7 +8,7 @@ set -e
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKUP_DIR="$SCRIPT_DIR/../backups"
-DATABASE_PATH="${DATABASE_URL:-./data/bot.db}"
+DATABASE_PATH="${DATABASE_URL:-./prisma/bot.db}"
 MAX_BACKUPS="${MAX_BACKUPS:-30}"
 COMPRESSION_LEVEL="${COMPRESSION_LEVEL:-6}"
 
@@ -127,27 +127,25 @@ restore_backup() {
     log "Decompressing backup..."
     gunzip -c "$backup_path" > "$temp_backup"
     
-    try {
-        # Use SQLite3 for restore if available
-        if check_sqlite3; then
-            log "Using SQLite3 for restore (recommended)"
-            sqlite3 "$DATABASE_PATH" ".restore '$temp_backup'"
-        else
-            warn "Using file copy method (fallback)"
-            cp "$temp_backup" "$DATABASE_PATH"
-        fi
-        
-        log "✓ Database restored successfully"
-        
-        # Restart the bot if it was running
-        if pm2 list | grep -q "follow-coin-bot"; then
-            log "Restarting bot..."
-            pm2 start follow-coin-bot
-        fi
-    } finally {
-        # Clean up temporary file
-        rm -f "$temp_backup"
-    }
+    # Use SQLite3 for restore if available
+    if check_sqlite3; then
+        log "Using SQLite3 for restore (recommended)"
+        sqlite3 "$DATABASE_PATH" ".restore '$temp_backup'"
+    else
+        warn "Using file copy method (fallback)"
+        cp "$temp_backup" "$DATABASE_PATH"
+    fi
+    
+    log "✓ Database restored successfully"
+    
+    # Restart the bot if it was running
+    if pm2 list | grep -q "follow-coin-bot"; then
+        log "Restarting bot..."
+        pm2 start follow-coin-bot
+    fi
+    
+    # Clean up temporary file
+    rm -f "$temp_backup"
 }
 
 # Clean up old backups

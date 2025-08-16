@@ -8,7 +8,7 @@ set -e
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR/.."
-HEALTH_CHECK_PORT="${HEALTH_CHECK_PORT:-3001}"
+HEALTH_CHECK_PORT="${HEALTH_CHECK_PORT:-3002}"
 CHECK_INTERVAL="${CHECK_INTERVAL:-300}"  # 5 minutes
 MAX_FAILURES="${MAX_FAILURES:-3}"        # Alert after 3 consecutive failures
 LOG_FILE="$PROJECT_ROOT/logs/monitor.log"
@@ -259,7 +259,7 @@ show_help() {
     echo "  help    - Show this help message"
     echo ""
     echo -e "${YELLOW}Environment variables:${NC}"
-    echo "  HEALTH_CHECK_PORT - Bot health check port (default: 3001)"
+    echo "  HEALTH_CHECK_PORT - Bot health check port (default: 3002)"
     echo "  CHECK_INTERVAL   - Check interval in seconds (default: 300)"
     echo "  MAX_FAILURES     - Max failures before alert (default: 3)"
     echo ""

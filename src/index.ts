@@ -132,9 +132,6 @@ class FollowCoinBot {
         );
       }
 
-      if (this.config.nodeEnv === 'development') {
-        this.startHealthCheck();
-      }
 
     } catch (error) {
       await globalErrorHandler.handleError(
@@ -223,7 +220,18 @@ class FollowCoinBot {
       );
 
       // Start health checks
-      await globalHealthCheck.performHealthCheck();
+      try {
+        await globalHealthCheck.performHealthCheck();
+      } catch (error) {
+        logger.warn('Internal health check failed, but continuing:', error);
+      }
+
+      // Start health check server AFTER all services are ready
+      try {
+        this.startHealthCheck();
+      } catch (error) {
+        logger.error('Failed to start health check HTTP server:', error);
+      }
 
       // Trigger initial backfill for existing coins
       await globalJobQueue.addJob('initial_backfill', {}, { priority: 1 });
@@ -241,31 +249,27 @@ class FollowCoinBot {
 
   private startHealthCheck(): void {
     const app = express();
-    const port = parseInt(process.env.HEALTH_CHECK_PORT || '3001');
+    const port = parseInt(process.env.HEALTH_CHECK_PORT || '3002');
     
-    // Health check endpoint
-    app.get('/health', async (req: express.Request, res: express.Response) => {
+    // Health check endpoint - lightweight, no database queries
+    app.get('/health', (req: express.Request, res: express.Response) => {
       try {
-        const healthStatus = await globalHealthCheck.getHealthStatus();
         const stats = {
           status: 'healthy',
           uptime: process.uptime(),
           timestamp: new Date().toISOString(),
           version: process.env.npm_package_version || '1.0.0',
           environment: this.config.nodeEnv,
-          services: {
-            database: healthStatus.services.database,
-            jobQueue: healthStatus.services.jobQueue,
-            alertBus: healthStatus.services.alertBus,
-            dexscreener: healthStatus.services.dexScreener,
-            telegram: healthStatus.services.telegram,
-            scheduler: this.scheduler.isSchedulerRunning()
+          pid: process.pid,
+          memory: {
+            used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+            total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
+            external: Math.round(process.memoryUsage().external / 1024 / 1024)
           },
-          metrics: {
-            memoryUsage: process.memoryUsage(),
-            cpuUsage: process.cpuUsage(),
-            rateLimitStats: this.rateLimiter.getRateLimitStats(),
-            errorStats: globalErrorHandler.getErrorStats()
+          // Simple process health indicators
+          process: {
+            alive: true,
+            scheduler: this.scheduler.isSchedulerRunning()
           }
         };
         
