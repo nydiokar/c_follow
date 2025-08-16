@@ -197,6 +197,49 @@ export class DatabaseService {
       where: { coinId },
       data: updateData
     });
+
+    logger.debug(`Recorded ${triggerType} trigger fire for coin ${coinId}`);
+  }
+
+  async recordLongTriggerAlert(coinId: number, trigger: any): Promise<void> {
+    const fingerprint = `long_${coinId}_${trigger.triggerType}_${trigger.timestamp || Date.now()}`;
+    
+    try {
+      await this.prisma.alertHistory.create({
+        data: {
+          coinId,
+          tsUtc: Math.floor(Date.now() / 1000),
+          kind: trigger.triggerType,
+          payloadJson: JSON.stringify(trigger),
+          fingerprint,
+        },
+      });
+    } catch (error) {
+      if ((error as any)?.code !== 'P2002') { // Ignore unique constraint errors
+        throw error;
+      }
+    }
+  }
+
+  async recordHotTriggerAlert(hotId: number, alert: any): Promise<void> {
+    const fingerprint = `hot_${hotId}_${alert.alertType}_${alert.timestamp}`;
+    
+    try {
+      await this.prisma.alertHistory.create({
+        data: {
+          hotId,
+          tsUtc: Math.floor(alert.timestamp / 1000),
+          kind: alert.alertType,
+          payloadJson: JSON.stringify(alert),
+          fingerprint,
+          symbol: alert.symbol,
+        },
+      });
+    } catch (error) {
+      if ((error as any)?.code !== 'P2002') { // Ignore unique constraint errors
+        throw error;
+      }
+    }
   }
 
   async getLongStates(): Promise<Array<{
@@ -253,7 +296,11 @@ export class DatabaseService {
       longCheckpointHours: config.longCheckpointHours,
       hotIntervalMinutes: config.hotIntervalMinutes,
       cooldownHours: config.cooldownHours,
-      hysteresisPct: config.hysteresisPct
+      hysteresisPct: config.hysteresisPct,
+      globalRetraceOn: config.globalRetraceOn,
+      globalStallOn: config.globalStallOn,
+      globalBreakoutOn: config.globalBreakoutOn,
+      globalMcapOn: config.globalMcapOn
     };
   }
 
@@ -287,6 +334,53 @@ export class DatabaseService {
     });
 
     return true;
+  }
+
+  async updateGlobalTriggerSettings(settings: {
+    globalRetraceOn?: boolean;
+    globalStallOn?: boolean;
+    globalBreakoutOn?: boolean;
+    globalMcapOn?: boolean;
+  }): Promise<void> {
+    await this.prisma.scheduleCfg.update({
+      where: { cfgId: 1 },
+      data: settings
+    });
+    
+    logger.info('Global trigger settings updated:', settings);
+  }
+
+  async getAllRecentAlerts(limit: number = 50): Promise<Array<{
+    symbol: string;
+    kind: string;
+    message: string;
+    timestamp: number;
+    source: 'hot' | 'long';
+  }>> {
+    try {
+      const alerts = await this.prisma.alertHistory.findMany({
+        include: { 
+          hotEntry: true,
+          coin: true
+        },
+        orderBy: { tsUtc: 'desc' },
+        take: limit,
+      });
+
+      return alerts.map((alert: any) => {
+        const payload = JSON.parse(alert.payloadJson);
+        return {
+          symbol: alert.hotEntry?.symbol || alert.coin?.symbol || 'Unknown',
+          kind: alert.kind,
+          message: payload.message,
+          timestamp: alert.tsUtc,
+          source: alert.hotId ? 'hot' : 'long' as 'hot' | 'long'
+        };
+      });
+    } catch (error) {
+      logger.error('Failed to get all recent alerts:', error);
+      throw error;
+    }
   }
 
   async disconnect(): Promise<void> {

@@ -167,27 +167,9 @@ export class SchedulerService {
         return;
       }
 
-      const grouped = this.groupTriggersByType(triggers);
-      let message = `🚨 *Long List Triggered Update*\n\n`;
-
-      for (const [type, typeTriggers] of grouped.entries()) {
-        message += `*${this.capitalizeFirst(type)} Triggers:*\n`;
-        
-        for (const trigger of typeTriggers) {
-          message += `• ${trigger.message}\n`;
-        }
-        message += '\n';
-      }
-
-      const fingerprint = `long_checkpoint_${Math.floor(Date.now() / 1000)}`;
-      await this.telegram.sendMessage(
-        process.env.TELEGRAM_CHAT_ID!,
-        message,
-        'MarkdownV2',
-        fingerprint
-      );
-
-      logger.info(`Long checkpoint sent with ${triggers.length} triggers`);
+      // Triggers are now automatically sent through the alert bus in longList.checkTriggers()
+      // Each individual trigger gets sent as it's detected for immediate user feedback
+      logger.info(`Long checkpoint completed with ${triggers.length} triggers`);
     } catch (error) {
       logger.error('Failed to run long checkpoint:', error);
     }
@@ -204,12 +186,8 @@ export class SchedulerService {
         return;
       }
 
-      for (const alert of alerts) {
-        await this.telegram.sendHotAlert(alert);
-        
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-
+      // Alerts are now automatically sent through the alert bus in hotList.checkAlerts()
+      // No need to manually send here anymore as the alert bus handles it
       logger.info(`Hot check completed with ${alerts.length} alerts`);
     } catch (error) {
       logger.error('Failed to run hot check:', error);

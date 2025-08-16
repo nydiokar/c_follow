@@ -4,6 +4,7 @@ import { HotListEntry, HotTrigger, HotAlert, HotListEvaluator } from '../types/h
 import { PairInfo } from '../types/dexscreener';
 import { logger } from '../utils/logger';
 import { DatabaseManager } from '../utils/database';
+import { globalAlertBus } from '../events/alertBus';
 
 class HotListTriggerEvaluator implements HotListEvaluator {
   private readonly failsafeThreshold = 60.0;
@@ -122,6 +123,29 @@ export class HotListService {
 
       const result = await this.prisma.$transaction(async (tx: any) => {
         console.log('Starting database transaction...');
+
+        // Upsert Coin
+        const coin = await tx.coin.upsert({
+          where: {
+            chain_pairAddress: {
+              chain: tokenData.chainId,
+              pairAddress: tokenData.pairAddress
+            }
+          },
+          update: {
+            symbol: tokenData.symbol,
+            name: tokenData.name,
+            isActive: true
+          },
+          create: {
+            chain: tokenData.chainId,
+            pairAddress: tokenData.pairAddress,
+            symbol: tokenData.symbol,
+            name: tokenData.name,
+            isActive: true
+          }
+        });
+
         const hotEntry = await tx.hotEntry.upsert({
           where: { contractAddress: contractAddress },
           update: {
@@ -134,6 +158,7 @@ export class HotListService {
             anchorMcap: tokenData.marketCap,
             pctTarget: options.pctTarget,
             mcapTargets: options.mcapTargets ? options.mcapTargets.join(',') : null,
+            coinId: coin.coinId
           },
           create: {
             contractAddress: contractAddress,
@@ -148,6 +173,7 @@ export class HotListService {
             anchorMcap: tokenData.marketCap,
             pctTarget: options.pctTarget,
             mcapTargets: options.mcapTargets ? options.mcapTargets.join(',') : null,
+            coinId: coin.coinId
           },
         });
         console.log('HotEntry created with ID:', hotEntry.hotId);
@@ -211,6 +237,8 @@ export class HotListService {
       };
       await this.recordAlert(initialAlert, tokenData);
 
+      globalAlertBus.emitHotAlert(initialAlert);
+
       logger.info(`Added ${tokenData.symbol} (${contractAddress}) to hot list with ID ${result}`, {
         ...options,
       });
@@ -226,12 +254,13 @@ export class HotListService {
 
   async removeEntry(contractAddress: string): Promise<boolean> {
     try {
-      const result = await this.prisma.hotEntry.deleteMany({
+      const result = await this.prisma.hotEntry.updateMany({
         where: { contractAddress },
+        data: { isActive: false },
       });
 
       if (result.count > 0) {
-        logger.info(`Removed ${contractAddress} from hot list`);
+        logger.info(`Deactivated ${contractAddress} from hot list`);
         return true;
       }
       return false;
@@ -271,6 +300,9 @@ export class HotListService {
           } else {
             await this.markTriggerFired(entry.hotId, alert.alertType, alert.targetValue!);
           }
+
+          // Emit alert through the global alert bus
+          await globalAlertBus.emitHotAlert(alert);
         }
 
         alerts.push(...entryAlerts);
@@ -324,6 +356,7 @@ export class HotListService {
   private async getActiveEntries(): Promise<HotListEntry[]> {
     try {
       const entries = await this.prisma.hotEntry.findMany({
+        where: { isActive: true },
         include: { triggerStates: true },
       });
 
@@ -358,22 +391,11 @@ export class HotListService {
 
   private async recordAlert(alert: HotAlert, pair: PairInfo): Promise<void> {
     const payload = { ...alert, pairInfo: pair };
-    const fingerprint = `hot_${alert.hotId}_${alert.alertType}_${alert.targetValue || 'failsafe'}_${alert.timestamp}`;
-
+    
     try {
-      await this.prisma.alertHistory.create({
-        data: {
-          hotId: alert.hotId,
-          tsUtc: alert.timestamp,
-          kind: alert.alertType,
-          payloadJson: JSON.stringify(payload),
-          fingerprint,
-        },
-      });
+      await this.db.recordHotTriggerAlert(alert.hotId, payload);
     } catch (error) {
-      if ((error as any)?.code !== 'P2002') { // Ignore unique constraint errors
-        throw error;
-      }
+      logger.error('Failed to record hot alert:', error);
     }
   }
 

@@ -48,6 +48,10 @@ export interface ScheduleConfigData {
   hotIntervalMinutes: number;
   cooldownHours: number;
   hysteresisPct: number;
+  globalRetraceOn: boolean;
+  globalStallOn: boolean;
+  globalBreakoutOn: boolean;
+  globalMcapOn: boolean;
 }
 
 export interface UpdateLongStateData {

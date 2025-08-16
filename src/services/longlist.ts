@@ -244,10 +244,10 @@ export class LongListService {
         await this.updateStateData(coin.coinId, pair, state);
 
         const triggerConfig: TriggerConfig = {
-          retraceOn: coin.config.retraceOn,
-          stallOn: coin.config.stallOn,
-          breakoutOn: coin.config.breakoutOn,
-          mcapOn: coin.config.mcapOn,
+          retraceOn: coin.config.retraceOn && config.globalRetraceOn,
+          stallOn: coin.config.stallOn && config.globalStallOn,
+          breakoutOn: coin.config.breakoutOn && config.globalBreakoutOn,
+          mcapOn: coin.config.mcapOn && config.globalMcapOn,
           retracePct: coin.config.retracePct,
           stallVolPct: coin.config.stallVolPct,
           stallBandPct: coin.config.stallBandPct,
@@ -271,6 +271,7 @@ export class LongListService {
 
         for (const trigger of evaluatedTriggers) {
           await this.db.recordTriggerFire(coin.coinId, trigger.triggerType);
+          await this.db.recordLongTriggerAlert(coin.coinId, trigger);
           await globalAlertBus.emitLongTrigger(trigger);
         }
       }

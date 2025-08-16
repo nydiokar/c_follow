@@ -82,7 +82,9 @@ export class Formatters {
   }
 
   static escapeMarkdown(text: string): string {
-    return text.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, '\\$&');
+    if (!text) return '';
+    const escapeChars = /[\\`*_[\]()~>#+=|{}.!-]/g;
+    return text.replace(escapeChars, '\\$&');
   }
 
   static createProgressBar(current: number, total: number, length: number = 10): string {

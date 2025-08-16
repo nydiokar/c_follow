@@ -46,7 +46,7 @@ export class DatabaseManager {
       // Enable WAL mode for better concurrency
       // Note: journal_mode PRAGMA returns results, so we need to handle it differently
       try {
-        await prisma.$executeRaw`PRAGMA journal_mode=WAL`;
+        await prisma.$queryRaw`PRAGMA journal_mode=WAL`;
         logger.info('WAL mode enabled');
       } catch (error) {
         logger.warn('Could not enable WAL mode, continuing with default:', error);

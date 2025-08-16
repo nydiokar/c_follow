@@ -180,8 +180,13 @@ class FollowCoinBot {
       this.dexScreener
     );
     console.log('Telegram service created, starting bot...');
-    await this.telegram.start();
-    console.log('Telegram bot started and connected!');
+    try {
+      await this.telegram.start();
+      console.log('Telegram bot started and connected!');
+    } catch (error) {
+      console.error('Failed to start Telegram bot:', error);
+      throw error;
+    }
 
     // Subscribe to alert events
     globalAlertBus.subscribe({
@@ -263,7 +268,7 @@ class FollowCoinBot {
     }, 60000); // Every minute in development
   }
 
-  private async gracefulShutdown(exitCode: number): Promise<void> {
+  async gracefulShutdown(exitCode: number): Promise<void> {
     if (this.isShuttingDown) {
       logger.warn('Shutdown already in progress, forcing exit');
       process.exit(exitCode);
@@ -324,6 +329,26 @@ async function main(): Promise<void> {
     console.log('Starting bot...');
     await bot.start();
     console.log('Bot started successfully!');
+    
+    // Keep the process alive - the bot needs to stay running
+    console.log('Bot is now running. Press Ctrl+C to stop.');
+    
+    // Set up graceful shutdown
+    process.on('SIGINT', async () => {
+      console.log('\nReceived SIGINT, shutting down gracefully...');
+      await bot.gracefulShutdown(0);
+    });
+    
+    process.on('SIGTERM', async () => {
+      console.log('\nReceived SIGTERM, shutting down gracefully...');
+      await bot.gracefulShutdown(0);
+    });
+    
+    // Keep the process alive indefinitely
+    await new Promise(() => {
+      // This promise never resolves, keeping the process running
+    });
+    
   } catch (error) {
     console.error('=== MAIN FUNCTION ERROR ===');
     console.error('Error type:', typeof error);

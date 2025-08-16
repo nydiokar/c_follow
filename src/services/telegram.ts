@@ -7,6 +7,7 @@ import { DexScreenerService } from './dexscreener';
 import { MessageSender, OutboxMessage } from '../types/telegram';
 import { logger } from '../utils/logger';
 import { PrismaClient } from '@prisma/client';
+import { Formatters } from '../utils/formatters';
 
 export class TelegramService implements MessageSender {
   private bot: Telegraf<Context<Update>>;
@@ -38,11 +39,6 @@ export class TelegramService implements MessageSender {
   }
 
   private setupCommands(): void {
-    // Remove the old regex-based command system - it's interfering with bot.command
-    // All commands are now handled by bot.command handlers below
-    
-    console.log('Setting up bot commands...');
-    
     this.bot.command('start', this.handleStartCommand.bind(this));
     this.bot.command('help', this.handleHelpCommand.bind(this));
     this.bot.command('long_add', this.handleLongAddCommand.bind(this));
@@ -51,24 +47,33 @@ export class TelegramService implements MessageSender {
     this.bot.command('long_set', this.handleLongSetCommand.bind(this));
     this.bot.command('report_now', this.handleReportNowCommand.bind(this));
     this.bot.command('hot_add', this.handleHotAddCommand.bind(this));
-    this.bot.command('hot_rm', this.handleHotRemoveCommand.bind(this));
+    this.bot.command('hot_remove', this.handleHotRemoveCommand.bind(this));
     this.bot.command('hot_list', this.handleHotListCommand.bind(this));
+    this.bot.command('list', this.handleHotListCommand.bind(this));
     this.bot.command('alerts', this.handleAlertsCommand.bind(this));
-    
-    console.log('Bot commands registered successfully');
+    this.bot.command('status', this.handleStatusCommand.bind(this));
   }
 
   private registerEventHandlers(): void {
+    // Add message handler to debug incoming messages
+    this.bot.on('message', (ctx) => {
+      logger.info('Received message:', ctx.message);
+    });
+    
     this.bot.catch((error: unknown) => {
       logger.error('Telegram bot error:', error);
+      // Attempt to restart polling if failed
+      setTimeout(() => this.bot.launch(), 5000);
     });
   }
 
   private async handleStartCommand(ctx: Context<Update>): Promise<void> {
+    logger.info('Start command received');
     await this.handleStart(ctx.message as Message);
   }
 
   private async handleHelpCommand(ctx: Context<Update>): Promise<void> {
+    logger.info('Received /help command');
     await this.handleHelp(ctx.message as Message);
   }
 
@@ -108,16 +113,22 @@ export class TelegramService implements MessageSender {
 
   private async handleHotRemoveCommand(ctx: Context<Update>): Promise<void> {
     const text = (ctx.message as any)?.text || '';
-    const match = text.match(/^\/hot_rm\s*(.*)/);
+    const match = text.match(/^\/hot_remove\s*(.*)/);
     await this.handleHotRemove(ctx.message as Message, match);
   }
 
   private async handleHotListCommand(ctx: Context<Update>): Promise<void> {
+    logger.info('Received /hot_list command');
     await this.handleHotList(ctx.message as Message);
   }
 
   private async handleAlertsCommand(ctx: Context<Update>): Promise<void> {
+    logger.info('Received /alerts command');
     await this.handleAlerts(ctx.message as Message);
+  }
+
+  private async handleStatusCommand(ctx: Context<Update>): Promise<void> {
+    await this.handleStatus(ctx.message as Message);
   }
 
   private async handleStart(msg: Message): Promise<void> {
@@ -147,14 +158,14 @@ Use /help to see all available commands.
     const helpText = `
 🤖 *Follow Coin Bot Commands*
 
-📊 *Long List (Persistent Monitoring)*
+📊 *Long List \\(Persistent Monitoring\\)*
 • \`/long_add SYMBOL\` - Add coin to long list
 • \`/long_rm SYMBOL\` - Remove coin from long list  
 • \`/long_trigger [type] [on|off]\` - Toggle triggers
 • \`/long_set SYMBOL retrace=15\` - Set custom thresholds
 • \`/report_now\` - Generate immediate anchor report
 
-🔥 *Hot List (Quick Alerts)*
+🔥 *Hot List \\(Quick Alerts\\)*
 • \`/hot_add CONTRACT_ADDRESS ±% mcap=VALUE\` - Add with triggers
 • \`/hot_rm CONTRACT_ADDRESS\` - Remove from hot list
 • \`/hot_list\` - Show all hot list entries
@@ -167,9 +178,9 @@ Use /help to see all available commands.
 • \`/hot_add 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU -10% mcap=1M\` - Both triggers
 
 💡 *Note:* 
-• Hot list requires at least one trigger (pct or mcap)
+• Hot list requires at least one trigger \\(pct or mcap\\)
 • Use contract/mint addresses, not symbols
-• Supports Solana addresses (32-44 characters)
+• Supports Solana addresses \\(32-44 characters\\)
 `;
 
     await this.sendMessage(msg.chat.id.toString(), helpText, 'MarkdownV2');
@@ -243,10 +254,28 @@ Use /help to see all available commands.
 
     const enabled = state === 'on';
     
-    await this.sendMessage(
-      msg.chat.id.toString(), 
-      `Global ${trigger} triggers ${enabled ? 'enabled' : 'disabled'}. Use /long_set for per-coin settings.`
-    );
+    try {
+      // Map trigger names to database fields
+      const triggerMap = {
+        'retrace': 'globalRetraceOn',
+        'stall': 'globalStallOn', 
+        'breakout': 'globalBreakoutOn',
+        'mcap': 'globalMcapOn'
+      } as const;
+      
+      const setting = { [triggerMap[trigger as keyof typeof triggerMap]]: enabled }; 
+      await this.db.updateGlobalTriggerSettings(setting);
+      
+      await this.sendMessage(
+        msg.chat.id.toString(), 
+        `✅ Global ${trigger} triggers ${enabled ? 'enabled' : 'disabled'}. Use /long_set for per-coin settings.`
+      );
+    } catch (error) {
+      await this.sendMessage(
+        msg.chat.id.toString(), 
+        `❌ Failed to update global ${trigger} trigger: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
   }
 
   private async handleLongSet(msg: Message, match: RegExpMatchArray | null): Promise<void> {
@@ -342,6 +371,10 @@ Use /help to see all available commands.
     }
   }
 
+  private formatPrice(price: number): string {
+    return price < 1 ? price.toFixed(6) : price.toFixed(4);
+  }
+
   private async handleHotAdd(msg: Message, match: RegExpMatchArray | null): Promise<void> {
     const args = match?.[1]?.trim().split(/\s+/) || [];
     const contractAddress = args[0];
@@ -381,7 +414,8 @@ Use /help to see all available commands.
         '• `+20%` (20% price rise)\n' +
         '• `mcap=1M` (1 million market cap)\n' +
         '• `mcap=500K` (500K market cap)\n\n' +
-        '*Example:* `/hot_add ' + contractAddress + ' -15%`'
+        '*Example:* `/hot_add ' + contractAddress + ' -15%`',
+        'MarkdownV2'
       );
       return;
     }
@@ -408,7 +442,8 @@ Use /help to see all available commands.
           await this.sendMessage(
             msg.chat.id.toString(), 
             `❌ *Invalid percentage format:* \`${param}\`\n` +
-            'Use format: `-15%` or `+20%`'
+            'Use format: `-15%` or `+20%`',
+            'MarkdownV2'
           );
           return;
         }
@@ -420,7 +455,8 @@ Use /help to see all available commands.
             await this.sendMessage(
               msg.chat.id.toString(), 
               `❌ *Invalid parameter format:* \`${param}\`\n` +
-              'Use format: `mcap=1M` or `mcap=500K`'
+              'Use format: `mcap=1M` or `mcap=500K`',
+              'MarkdownV2'
             );
             return;
           }
@@ -443,7 +479,8 @@ Use /help to see all available commands.
             await this.sendMessage(
               msg.chat.id.toString(), 
               `❌ *Invalid market cap:* \`${value}\`\n` +
-              'Use format: `mcap=1M`, `mcap=500K`, or `mcap=1000000`'
+              'Use format: `mcap=1M`, `mcap=500K`, or `mcap=1000000`',
+              'MarkdownV2'
             );
             return;
           }
@@ -455,7 +492,8 @@ Use /help to see all available commands.
           await this.sendMessage(
             msg.chat.id.toString(), 
             `❌ *Unknown parameter:* \`${param}\`\n` +
-            'Valid parameters: percentage (e.g., `-15%`) or `mcap=VALUE`'
+            'Valid parameters: percentage (e.g., `-15%`) or `mcap=VALUE`',
+            'MarkdownV2'
           );
           return;
         }
@@ -467,7 +505,8 @@ Use /help to see all available commands.
           '❌ *Error:* No valid trigger criteria provided!\n\n' +
           'You must specify at least one of:\n' +
           '• `-15%` (percentage change)\n' +
-          '• `mcap=1M` (market cap target)'
+          '• `mcap=1M` (market cap target)',
+          'MarkdownV2'
         );
         return;
       }
@@ -491,50 +530,39 @@ Use /help to see all available commands.
 
       // Show confirmation with actual token data
       let message = `✅ *Token Added to Hot List*\n\n`;
-      message += `*Token Info:*\n`;
-      message += `🔗 Contract: \`${contractAddress}\`\n`;
-      message += `📛 Symbol: ${pair.symbol}\n`;
-      message += `📝 Name: ${pair.name}\n`;
+      message += `CA: \`${contractAddress}\`\n\n`;
+      
       const website = pair.info?.websites?.find((w: { url: string }) => w.url)?.url;
       if (website) {
-        message += `🌐 Website: [${website.replace(/^(https?:\/\/)?(www\.)?/, '')}](${website})\n`;
+        message += `[${pair.name} (${pair.symbol})](${website})\n`;
+      } else {
+        message += `${pair.name} (${pair.symbol})\n`;
       }
-      message += `💰 Price: $${pair.price.toFixed(6)}\n`;
+      
+      message += `💰 Price: $${this.formatPrice(pair.price)}\n`;
       message += `📊 Market Cap: ${this.formatMarketCap(pair.marketCap || 0)}\n\n`;
 
-      message += `*Triggers Set:*\n`;
-      
       if (options.pctTarget) {
-        const direction = options.pctTarget > 0 ? '📈' : '📉';
         const currentPrice = pair.price;
         const targetPrice = currentPrice * (1 + options.pctTarget / 100);
-        message += `${direction} *Price:* ${options.pctTarget > 0 ? '+' : ''}${options.pctTarget}%\n`;
-        message += `   Target: $${targetPrice.toFixed(6)} (from $${currentPrice.toFixed(6)})\n`;
+        message += `📈 Target: $${this.formatPrice(targetPrice)} (${options.pctTarget > 0 ? '+' : ''}${options.pctTarget}%)\n`;
       }
       
       if (options.mcapTargets) {
-        message += `💰 *Market Cap:* ${this.formatMarketCap(options.mcapTargets[0])}\n`;
+        message += `🎯 MCAP Target: ${this.formatMarketCap(options.mcapTargets[0])}\n`;
       }
       
-      message += `\n*Note:* 60% drawdown failsafe is always active`;
-      
-      console.log('About to send message to chat:', msg.chat.id);
-      console.log('Message content:', message.substring(0, 200) + '...');
-      
-      try {
-        await this.sendMessage(msg.chat.id.toString(), message, 'MarkdownV2');
-        console.log('Message sent successfully!');
-      } catch (sendError) {
-        console.error('Failed to send message:', sendError);
-        logger.error('Failed to send confirmation message:', sendError);
-        // Try to send a simple error message
-        try {
-          await this.bot.telegram.sendMessage(msg.chat.id.toString(), '✅ Token added successfully but failed to send details. Check /hot_list to confirm.');
-          console.log('Fallback message sent successfully!');
-        } catch (fallbackError) {
-          console.error('Even fallback message failed:', fallbackError);
-        }
-      }
+       try {
+         await this.sendMessage(msg.chat.id.toString(), message, 'MarkdownV2');
+       } catch (sendError) {
+         logger.error('Failed to send confirmation message:', sendError);
+         // Try to send a simple error message
+         try {
+           await this.bot.telegram.sendMessage(msg.chat.id.toString(), '✅ Token added successfully but failed to send details. Check /hot_list to confirm.');
+         } catch (fallbackError) {
+           logger.error('Fallback message also failed:', fallbackError);
+         }
+       }
       
     } catch (error) {
       logger.error('Error adding token to hot list:', error);
@@ -544,7 +572,8 @@ Use /help to see all available commands.
         'This might be due to:\n' +
         '• Invalid contract address\n' +
         '• Token not found on supported chains\n' +
-        '• Network issues'
+        '• Network issues',
+        'MarkdownV2'
       );
     }
   }
@@ -557,7 +586,8 @@ Use /help to see all available commands.
       await this.sendMessage(
         msg.chat.id.toString(), 
         'Usage: /hot_rm CONTRACT_ADDRESS\n\n' +
-        'Example: `/hot_rm 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU`'
+        'Example: `/hot_rm 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU`',
+        'MarkdownV2'
       );
       return;
     }
@@ -567,41 +597,46 @@ Use /help to see all available commands.
       if (removed) {
         await this.sendMessage(
           msg.chat.id.toString(), 
-          `✅ Removed token with contract \`${contractAddress}\` from hot list`
+          `✅ Removed token with contract \`${contractAddress}\` from hot list`,
+          'MarkdownV2'
         );
       } else {
         await this.sendMessage(
           msg.chat.id.toString(), 
-          `❌ Token with contract \`${contractAddress}\` not found in hot list`
+          `❌ Token with contract \`${contractAddress}\` not found in hot list`,
+          'MarkdownV2'
         );
       }
     } catch (error) {
       await this.sendMessage(
         msg.chat.id.toString(), 
-        `❌ Failed to remove token: ${error instanceof Error ? error.message : 'Unknown error'}`
+        `❌ Failed to remove token: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'MarkdownV2'
       );  
     }
   }
 
   private async handleHotList(msg: Message): Promise<void> {
+    logger.info('Received /hot_list command');
     try {
       const entries = await this.hotList.listEntries();
       
       if (entries.length === 0) {
-        await this.sendMessage(msg.chat.id.toString(), 'No coins in hot list');
+        await this.sendMessage(msg.chat.id.toString(), 'No coins in hot list', 'MarkdownV2');
         return;
       }
 
-      let message = `🔥 *Hot List Entries*\n\n`;
+      let message = `🔥 Hot List Entries\n\n`;
       
       for (const entry of entries) {
         const addedDate = new Date(entry.addedAtUtc * 1000).toLocaleDateString();
-        message += `*${entry.symbol}*\n`;
-        message += `Anchor: $${entry.anchorPrice.toFixed(6)} (${addedDate})\n`;
+        message += `${entry.symbol}\n`;
+        message += `Anchor: $${this.formatPrice(entry.anchorPrice)} (${addedDate})\n`;
         
         if (entry.pctTarget) {
           const status = entry.activeTriggers.find(t => t.kind === 'pct')?.fired ? '✅' : '⏳';
-          message += `${status} Target: ${entry.pctTarget > 0 ? '+' : ''}${entry.pctTarget}%\n`;
+          const targetPrice = entry.anchorPrice * (1 + entry.pctTarget / 100);
+          message += `${status} Target: ${entry.pctTarget > 0 ? '+' : ''}${entry.pctTarget}% ($${this.formatPrice(targetPrice)})\n`;
         }
         
         if (entry.mcapTargets && entry.mcapTargets.length > 0) {
@@ -618,21 +653,42 @@ Use /help to see all available commands.
     } catch (error) {
       await this.sendMessage(
         msg.chat.id.toString(), 
-        `❌ Failed to show hot list: ${error instanceof Error ? error.message : 'Unknown error'}`
+        `❌ Failed to show hot list: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'MarkdownV2'
+      );
+    }
+  }
+
+  private async handleStatus(msg: Message): Promise<void> {
+    try {
+      const hotEntries = await this.hotList.listEntries();
+      
+      let message = `📊 *Bot Status*\n\n`;
+      message += `🔥 *Hot List:* ${hotEntries.length} entries\n`;
+      message += `⏰ *Uptime:* ${process.uptime().toFixed(0)}s\n`;
+      message += `🔄 *Node Env:* ${process.env.NODE_ENV || 'development'}\n`;
+      
+      await this.sendMessage(msg.chat.id.toString(), message, 'MarkdownV2');
+    } catch (error) {
+      await this.sendMessage(
+        msg.chat.id.toString(), 
+        `❌ Failed to get status: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'MarkdownV2'
       );
     }
   }
 
   private async handleAlerts(msg: Message): Promise<void> {
+    logger.info('Received /alerts command');
     try {
-      const alerts = await this.hotList.getAlertHistory(20);
+      const alerts = await this.db.getAllRecentAlerts(20);
       
       if (alerts.length === 0) {
-        await this.sendMessage(msg.chat.id.toString(), 'No recent alerts');
+        await this.sendMessage(msg.chat.id.toString(), 'No recent alerts', 'MarkdownV2');
         return;
       }
 
-      let message = `🔔 *Recent Hot List Alerts*\n\n`;
+      let message = `🔔 *Recent Alerts \\(Hot + Long\\)*\n\n`;
       
       for (const alert of alerts) {
         const timestamp = new Date(alert.timestamp * 1000).toLocaleString('en-US', {
@@ -643,20 +699,39 @@ Use /help to see all available commands.
           hour12: false
         });
         
-        message += `${timestamp} | ${alert.message}\n`;
+        const icon = alert.source === 'hot' ? '🔥' : '📊';
+        const typeIcon = {
+          'entry_added': '✅',
+          'pct': alert.kind.includes('+') ? '📈' : '📉',
+          'mcap': '💰',
+          'failsafe': '🛑'
+        }[alert.kind] || '⚠️';
+        
+        message += `${typeIcon} *${alert.symbol}* - ${alert.kind.charAt(0).toUpperCase() + alert.kind.slice(1)}\n`;
+        
+        if (alert.kind === 'entry_added') {
+          message += `   New token added to hot list\n`;
+        } else {
+          message += `   ${alert.message}\n`;
+        }
+        
+        message += `   ${timestamp}\n\n`;
       }
 
       await this.sendMessage(msg.chat.id.toString(), message, 'MarkdownV2');
     } catch (error) {
       await this.sendMessage(
         msg.chat.id.toString(), 
-        `❌ Failed to show alerts: ${error instanceof Error ? error.message : 'Unknown error'}`
+        `❌ Failed to show alerts: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'MarkdownV2'
       );
     }
   }
 
   async sendMessage(chatId: string, text: string, parseMode?: 'MarkdownV2' | 'HTML', fingerprint?: string): Promise<boolean> {
     try {
+      logger.info(`Attempting to send message to ${chatId}, parseMode: ${parseMode}, text length: ${text.length}`);
+      
       if (fingerprint) {
         const existing = await this.prisma.outbox.findUnique({
           where: { fingerprint }
@@ -669,9 +744,18 @@ Use /help to see all available commands.
       }
 
       const options: any = {};
-      if (parseMode) options.parse_mode = parseMode;
+      let processedText = text;
 
-      await this.bot.telegram.sendMessage(chatId, text, options);
+      if (parseMode === 'MarkdownV2') {
+        options.parse_mode = 'MarkdownV2';
+        processedText = Formatters.escapeMarkdown(text);
+      } else if (parseMode) {
+        options.parse_mode = parseMode;
+      }
+
+      logger.info(`Sending message with options:`, options);
+      const result = await this.bot.telegram.sendMessage(chatId, processedText, options);
+      logger.info(`Message sent successfully:`, result);
       
       if (fingerprint) {
         await this.prisma.outbox.upsert({
@@ -694,6 +778,7 @@ Use /help to see all available commands.
       return true;
     } catch (error) {
       logger.error('Failed to send message:', error);
+      logger.error('Message details - chatId:', chatId, 'parseMode:', parseMode, 'text preview:', text.substring(0, 100));
       
       if (fingerprint) {
         await this.prisma.outbox.upsert({
@@ -788,42 +873,53 @@ Use /help to see all available commands.
 
   async start(): Promise<void> {
     try {
-      console.log('=== TELEGRAM BOT START ===');
-      console.log('Launching Telegram bot...');
-      console.log('Bot instance:', this.bot ? 'Created' : 'NULL');
-      console.log('Chat ID:', this.chatId);
+      logger.info('Starting Telegram bot...');
       
-      console.log('About to call bot.launch()...');
-      
-      // Add timeout to prevent hanging
-      const launchPromise = this.bot.launch();
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('bot.launch() timed out after 10 seconds')), 10000)
-      );
-      
-      await Promise.race([launchPromise, timeoutPromise]);
-      console.log('✅ bot.launch() completed successfully');
-      
-      console.log('Telegram bot launched successfully and listening for messages');
-      logger.info('Telegram bot launched successfully');
-      
-      // Test message to verify bot can send messages
-      console.log('Sending test message to chat:', this.chatId);
+      // Validate bot token
       try {
-        const result = await this.bot.telegram.sendMessage(this.chatId, '🚀 Bot started successfully!');
-        console.log('✅ Test message sent successfully - bot is working!');
-        console.log('Message result:', result);
-      } catch (testError) {
-        console.error('❌ Test message failed - bot cannot send messages:', testError);
-        console.error('Test error details:', JSON.stringify(testError, null, 2));
+        await this.bot.telegram.getMe();
+      } catch (tokenError) {
+        throw new Error(`Invalid bot token: ${tokenError}`);
       }
       
-      console.log('=== TELEGRAM BOT START COMPLETE ===');
+      // Clear any existing webhook and launch bot
+      try {
+        await this.bot.telegram.deleteWebhook();
+      } catch (webhookError) {
+        // Webhook deletion failure is not critical
+      }
+      
+      // Launch bot with timeout fallback
+      const launchPromise = this.bot.launch();
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('bot.launch() timed out')), 5000)
+      );
+      
+      try {
+        await Promise.race([launchPromise, timeoutPromise]);
+      } catch (launchError) {
+        // Fallback: bot will use long polling
+        this.bot.catch((error: any) => {
+          logger.error('Bot error:', error);
+        });
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+      
+      logger.info('Telegram bot started successfully');
+      
+      // Send startup message
+      try {
+        await this.bot.telegram.sendMessage(this.chatId, '🚀 Bot started successfully!');
+      } catch (testError) {
+        logger.warn('Failed to send startup message:', testError);
+      }
+      
+      setInterval(() => {
+        logger.info('Telegram bot alive check');
+      }, 30000); // Every 30 seconds
       
     } catch (error) {
-      console.error('❌ Failed to launch Telegram bot:', error);
-      console.error('Launch error details:', JSON.stringify(error, null, 2));
-      logger.error('Failed to launch Telegram bot:', error);
+      logger.error('Failed to start Telegram bot:', error);
       throw error;
     }
   }
