@@ -28,6 +28,9 @@ export interface LongListState {
   lastStallFireUtc?: number;
   lastBreakoutFireUtc?: number;
   lastMcapFireUtc?: number;
+  lastRetracePrice?: number;
+  lastBreakoutPrice?: number;
+  lastStallPrice?: number;
 }
 
 export interface TriggerResult {

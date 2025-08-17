@@ -8,6 +8,11 @@ import { globalAlertBus } from '../events/alertBus';
 import { Formatters } from '../utils/formatters';
 
 class LongListTriggerEvaluator implements TriggerEvaluator {
+  /**
+   * Simple trigger evaluator following the plan specification
+   * No complex hysteresis - just basic cooldowns and conditions
+   */
+
   evaluateRetrace(state: LongListState, config: TriggerConfig, currentPrice: number, cooldownHours: number): boolean {
     if (!config.retraceOn || !state.h72High || currentPrice <= 0) {
       return false;
@@ -16,10 +21,13 @@ class LongListTriggerEvaluator implements TriggerEvaluator {
     const now = Math.floor(Date.now() / 1000);
     const cooldownSeconds = cooldownHours * 3600;
     
+    // Check cooldown period (2h as per plan)
     if (state.lastRetraceFireUtc && (now - state.lastRetraceFireUtc) < cooldownSeconds) {
+      logger.debug(`Retrace trigger blocked by cooldown for ${state.coinId}`);
       return false;
     }
 
+    // Simple retrace condition: price drops below threshold from 72h high
     const retraceThreshold = state.h72High * (1 - config.retracePct / 100);
     return currentPrice <= retraceThreshold;
   }
@@ -32,10 +40,13 @@ class LongListTriggerEvaluator implements TriggerEvaluator {
     const now = Math.floor(Date.now() / 1000);
     const cooldownSeconds = cooldownHours * 3600;
     
+    // Check cooldown period (2h as per plan)
     if (state.lastStallFireUtc && (now - state.lastStallFireUtc) < cooldownSeconds) {
+      logger.debug(`Stall trigger blocked by cooldown for ${state.coinId}`);
       return false;
     }
-
+    
+    // Simple stall condition: volume down 30% vs 24h AND price in ±5% band over 12h
     const volumeDropped = currentVolume <= (state.v24Sum * (1 - config.stallVolPct / 100));
     const priceInBand = (
       state.h12High <= currentPrice * (1 + config.stallBandPct / 100) &&
@@ -53,10 +64,13 @@ class LongListTriggerEvaluator implements TriggerEvaluator {
     const now = Math.floor(Date.now() / 1000);
     const cooldownSeconds = cooldownHours * 3600;
     
+    // Check cooldown period (2h as per plan)
     if (state.lastBreakoutFireUtc && (now - state.lastBreakoutFireUtc) < cooldownSeconds) {
+      logger.debug(`Breakout trigger blocked by cooldown for ${state.coinId}`);
       return false;
     }
 
+    // Simple breakout condition: price +12% vs 12h baseline AND volume 1.5x vs 12h
     const priceBreakout = currentPrice >= (state.h12High * (1 + config.breakoutPct / 100));
     const volumeIncrease = currentVolume >= (state.v12Sum * config.breakoutVolX);
 
@@ -240,6 +254,15 @@ export class LongListService {
         if (!pair || !state || !this.dexScreener.validatePairData(pair)) {
           continue;
         }
+        
+        // Check if we have enough historical data before evaluating triggers
+        const isWarmupComplete = await this.rollingWindow.isWarmupComplete(coin.coinId, 12); // Require at least 12 hours of data
+        if (!isWarmupComplete) {
+          logger.info(`Skipping triggers for ${coin.symbol} - warmup not complete`);
+          // Still update state data even if we skip triggers
+          await this.updateStateData(coin.coinId, pair, state);
+          continue;
+        }
 
         await this.updateStateData(coin.coinId, pair, state);
 
@@ -270,9 +293,16 @@ export class LongListService {
         triggers.push(...evaluatedTriggers);
 
         for (const trigger of evaluatedTriggers) {
-          await this.db.recordTriggerFire(coin.coinId, trigger.triggerType);
-          await this.db.recordLongTriggerAlert(coin.coinId, trigger);
-          await globalAlertBus.emitLongTrigger(trigger);
+          logger.info(`Recording trigger for ${coin.symbol}: type=${trigger.triggerType}, price=${trigger.price}`);
+          
+          try {
+            await this.db.recordTriggerFire(coin.coinId, trigger.triggerType, trigger.price);
+            await this.db.recordLongTriggerAlert(coin.coinId, trigger);
+            await globalAlertBus.emitLongTrigger(trigger);
+          } catch (error) {
+            logger.error(`Failed to record ${trigger.triggerType} trigger for ${coin.symbol}:`, error);
+            throw error;
+          }
         }
       }
 
@@ -366,18 +396,38 @@ export class LongListService {
     const h12 = 12 * 3600;
     const h24 = 24 * 3600;
     const h72 = 72 * 3600;
-
-    const newState = {
-      h12High: Math.max(currentState.h12High || pair.price, pair.price),
-      h24High: Math.max(currentState.h24High || pair.price, pair.price),
-      h72High: Math.max(currentState.h72High || pair.price, pair.price),
-      h12Low: Math.min(currentState.h12Low || pair.price, pair.price),
-      h24Low: Math.min(currentState.h24Low || pair.price, pair.price),
-      h72Low: Math.min(currentState.h72Low || pair.price, pair.price),
-      v12Sum: pair.volume24h * 0.5,
-      v24Sum: pair.volume24h
+    
+    // Check if we have historical data points
+    const dataPoints = await this.rollingWindow.getDataPointsCount(coinId);
+    const hasHistory = dataPoints > 0;
+    
+    // Create new state with more accurate handling
+    const newState: any = {
+      h12High: currentState.h12High !== undefined ? Math.max(currentState.h12High, pair.price) : pair.price,
+      h24High: currentState.h24High !== undefined ? Math.max(currentState.h24High, pair.price) : pair.price,
+      h72High: currentState.h72High !== undefined ? Math.max(currentState.h72High, pair.price) : pair.price,
+      h12Low: currentState.h12Low !== undefined ? Math.min(currentState.h12Low, pair.price) : pair.price,
+      h24Low: currentState.h24Low !== undefined ? Math.min(currentState.h24Low, pair.price) : pair.price,
+      h72Low: currentState.h72Low !== undefined ? Math.min(currentState.h72Low, pair.price) : pair.price,
     };
+    
+    // Get more accurate volume data if possible
+    if (hasHistory) {
+      try {
+        newState.v12Sum = await this.rollingWindow.getSumVolume(coinId, now - h12, now);
+        newState.v24Sum = pair.volume24h; // Already 24h from API
+      } catch (error) {
+        logger.warn(`Failed to get accurate volume data, using estimates for ${coinId}`, error);
+        newState.v12Sum = pair.volume24h * 0.5; // Fallback
+        newState.v24Sum = pair.volume24h;
+      }
+    } else {
+      // Initial data without history
+      newState.v12Sum = pair.volume24h * 0.5;
+      newState.v24Sum = pair.volume24h;
+    }
 
+    // Reset time period values if enough time has passed
     if (currentState.lastUpdatedUtc && (now - currentState.lastUpdatedUtc) > h12) {
       newState.h12High = pair.price;
       newState.h12Low = pair.price;

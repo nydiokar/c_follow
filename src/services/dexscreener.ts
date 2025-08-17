@@ -160,6 +160,7 @@ export class DexScreenerService {
   }
 
   validatePairData(pairInfo: PairInfo): boolean {
+    // Basic validation
     if (!pairInfo.price || pairInfo.price <= 0) {
       logger.warn(`Invalid price for ${pairInfo.symbol}: ${pairInfo.price}`);
       return false;
@@ -169,10 +170,33 @@ export class DexScreenerService {
       logger.warn(`Invalid volume for ${pairInfo.symbol}: ${pairInfo.volume24h}`);
       return false;
     }
-
+    
+    // Enhanced checks for anomalies
     const priceChangeAbs = Math.abs(pairInfo.priceChange24h);
+    
+    // Handle extreme price changes
     if (priceChangeAbs > 95) {
-      logger.warn(`Suspicious price change for ${pairInfo.symbol}: ${pairInfo.priceChange24h}%`);
+      // Check if volume confirms the price change
+      const volumeSupportsChange = pairInfo.volume24h > 0 && 
+        (pairInfo.marketCap ? pairInfo.volume24h > pairInfo.marketCap * 0.05 : true);
+      
+      if (!volumeSupportsChange) {
+        logger.warn(`Suspicious price change for ${pairInfo.symbol}: ${pairInfo.priceChange24h}% with insufficient volume`);
+        return false;
+      }
+      
+      logger.info(`Large but valid price change for ${pairInfo.symbol}: ${pairInfo.priceChange24h}% with supporting volume`);
+    }
+    
+    // Check for volume anomalies
+    if (pairInfo.volume24h > 0 && pairInfo.marketCap && pairInfo.volume24h > pairInfo.marketCap * 3) {
+      logger.warn(`Suspicious volume for ${pairInfo.symbol}: ${pairInfo.volume24h} exceeds 3x market cap`);
+      return false;
+    }
+    
+    // Check for zero liquidity
+    if (pairInfo.liquidity !== undefined && pairInfo.liquidity !== null && pairInfo.liquidity <= 0) {
+      logger.warn(`Zero liquidity for ${pairInfo.symbol}, data may be inaccurate`);
       return false;
     }
 

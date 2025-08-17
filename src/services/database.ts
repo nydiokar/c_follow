@@ -10,7 +10,8 @@ export class DatabaseService {
   }
 
   async initialize(): Promise<void> {
-    // Initialization handled by DatabaseManager
+    // Initialize the database manager which will create default config
+    await DatabaseManager.initialize();
     logger.info('DatabaseService initialized');
   }
 
@@ -174,31 +175,53 @@ export class DatabaseService {
     });
   }
 
-  async recordTriggerFire(coinId: number, triggerType: 'retrace' | 'stall' | 'breakout' | 'mcap'): Promise<void> {
+  async recordTriggerFire(coinId: number, triggerType: 'retrace' | 'stall' | 'breakout' | 'mcap', price?: number): Promise<void> {
     const now = Math.floor(Date.now() / 1000);
-    const updateData: Record<string, number> = {};
+    const updateData: Record<string, any> = {}; // Changed to 'any' to support number and null
+
+    logger.info(`DB recordTriggerFire called: coinId=${coinId}, triggerType=${triggerType}, price=${price}`);
 
     switch (triggerType) {
       case 'retrace':
         updateData.lastRetraceFireUtc = now;
+        if (price !== undefined) {
+          updateData.lastRetracePrice = price;
+          logger.info(`Setting lastRetracePrice to ${price}`);
+        }
         break;
       case 'stall':
         updateData.lastStallFireUtc = now;
+        if (price !== undefined) {
+          updateData.lastStallPrice = price;
+          logger.info(`Setting lastStallPrice to ${price}`);
+        }
         break;
       case 'breakout':
         updateData.lastBreakoutFireUtc = now;
+        if (price !== undefined) {
+          updateData.lastBreakoutPrice = price;
+          logger.info(`Setting lastBreakoutPrice to ${price}`);
+        }
         break;
       case 'mcap':
         updateData.lastMcapFireUtc = now;
         break;
     }
 
-    await this.prisma.longState.update({
-      where: { coinId },
-      data: updateData
-    });
+    logger.info(`Update data prepared: ${JSON.stringify(updateData)}`);
 
-    logger.debug(`Recorded ${triggerType} trigger fire for coin ${coinId}`);
+    try {
+      const result = await this.prisma.longState.update({
+        where: { coinId },
+        data: updateData
+      });
+      logger.info(`Update result: ${JSON.stringify(result)}`);
+    } catch (error) {
+      logger.error(`Failed to update longState for coinId=${coinId}: ${error}`);
+      throw error;
+    }
+
+    logger.debug(`Recorded ${triggerType} trigger fire for coin ${coinId}${price ? ' at price ' + price : ''}`);
   }
 
   async recordLongTriggerAlert(coinId: number, trigger: any): Promise<void> {
@@ -259,6 +282,9 @@ export class DatabaseService {
     lastStallFireUtc?: number;
     lastBreakoutFireUtc?: number;
     lastMcapFireUtc?: number;
+    lastRetracePrice?: number;
+    lastBreakoutPrice?: number;
+    lastStallPrice?: number;
   }>> {
     const states = await this.prisma.longState.findMany();
     return states.map((state: any): LongStateData => ({
@@ -277,7 +303,10 @@ export class DatabaseService {
       lastRetraceFireUtc: state.lastRetraceFireUtc || undefined,
       lastStallFireUtc: state.lastStallFireUtc || undefined,
       lastBreakoutFireUtc: state.lastBreakoutFireUtc || undefined,
-      lastMcapFireUtc: state.lastMcapFireUtc || undefined
+      lastMcapFireUtc: state.lastMcapFireUtc || undefined,
+      lastRetracePrice: state.lastRetracePrice || undefined,
+      lastBreakoutPrice: state.lastBreakoutPrice || undefined,
+      lastStallPrice: state.lastStallPrice || undefined
     }));
   }
 
@@ -296,7 +325,6 @@ export class DatabaseService {
       longCheckpointHours: config.longCheckpointHours,
       hotIntervalMinutes: config.hotIntervalMinutes,
       cooldownHours: config.cooldownHours,
-      hysteresisPct: config.hysteresisPct,
       globalRetraceOn: config.globalRetraceOn,
       globalStallOn: config.globalStallOn,
       globalBreakoutOn: config.globalBreakoutOn,

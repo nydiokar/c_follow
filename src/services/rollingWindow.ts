@@ -207,6 +207,18 @@ export class RollingWindowManager {
     return earliestTimestamp ? earliestTimestamp <= requiredTime : false;
   }
 
+  async getSumVolume(coinId: number, startTime: number, endTime: number): Promise<number> {
+    const prisma = DatabaseManager.getInstance();
+    
+    const result = await prisma.$queryRaw<Array<{ total: number }>>`
+      SELECT SUM(volume) as total
+      FROM rolling_data_points 
+      WHERE coin_id = ${coinId} AND timestamp >= ${startTime} AND timestamp <= ${endTime}
+    `;
+    
+    return result[0]?.total || 0;
+  }
+
   stop(): void {
     if (this.cleanupTimer) {
       clearInterval(this.cleanupTimer);

@@ -94,7 +94,10 @@ export class DatabaseManager {
           longCheckpointHours: 6,
           hotIntervalMinutes: 1,
           cooldownHours: 2.0,
-          hysteresisPct: 30.0
+          globalRetraceOn: true,
+          globalStallOn: true,
+          globalBreakoutOn: true,
+          globalMcapOn: false
         }
       });
       logger.info('Created default schedule configuration');

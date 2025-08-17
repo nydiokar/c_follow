@@ -39,6 +39,9 @@ export interface LongStateData {
   lastStallFireUtc?: number;
   lastBreakoutFireUtc?: number;
   lastMcapFireUtc?: number;
+  lastRetracePrice?: number;
+  lastBreakoutPrice?: number;
+  lastStallPrice?: number;
 }
 
 export interface ScheduleConfigData {
@@ -47,7 +50,6 @@ export interface ScheduleConfigData {
   longCheckpointHours: number;
   hotIntervalMinutes: number;
   cooldownHours: number;
-  hysteresisPct: number;
   globalRetraceOn: boolean;
   globalStallOn: boolean;
   globalBreakoutOn: boolean;

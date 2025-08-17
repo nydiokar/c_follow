@@ -64,6 +64,9 @@ model LongState {
   lastStallFireUtc    Int?   @map("last_stall_fire_utc")
   lastBreakoutFireUtc Int?   @map("last_breakout_fire_utc")
   lastMcapFireUtc     Int?   @map("last_mcap_fire_utc")
+  lastRetracePrice    Float? @map("last_retrace_price")
+  lastBreakoutPrice   Float? @map("last_breakout_price")
+  lastStallPrice      Float? @map("last_stall_price")
   coin                Coin   @relation(fields: [coinId], references: [coinId], onDelete: Cascade)
 
   @@index([lastUpdatedUtc])
