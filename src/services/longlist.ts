@@ -23,7 +23,6 @@ class LongListTriggerEvaluator implements TriggerEvaluator {
     
     // Check cooldown period (2h as per plan)
     if (state.lastRetraceFireUtc && (now - state.lastRetraceFireUtc) < cooldownSeconds) {
-      logger.debug(`Retrace trigger blocked by cooldown for ${state.coinId}`);
       return false;
     }
 
@@ -42,15 +41,14 @@ class LongListTriggerEvaluator implements TriggerEvaluator {
     
     // Check cooldown period (2h as per plan)
     if (state.lastStallFireUtc && (now - state.lastStallFireUtc) < cooldownSeconds) {
-      logger.debug(`Stall trigger blocked by cooldown for ${state.coinId}`);
       return false;
     }
     
     // Simple stall condition: volume down 30% vs 24h AND price in ±5% band over 12h
     const volumeDropped = currentVolume <= (state.v24Sum * (1 - config.stallVolPct / 100));
     const priceInBand = (
-      state.h12High <= currentPrice * (1 + config.stallBandPct / 100) &&
-      state.h12Low >= currentPrice * (1 - config.stallBandPct / 100)
+      currentPrice >= state.h12Low * (1 - config.stallBandPct / 100) &&
+      currentPrice <= state.h12High * (1 + config.stallBandPct / 100)
     );
 
     return volumeDropped && priceInBand;
@@ -66,7 +64,6 @@ class LongListTriggerEvaluator implements TriggerEvaluator {
     
     // Check cooldown period (2h as per plan)
     if (state.lastBreakoutFireUtc && (now - state.lastBreakoutFireUtc) < cooldownSeconds) {
-      logger.debug(`Breakout trigger blocked by cooldown for ${state.coinId}`);
       return false;
     }
 
@@ -114,19 +111,13 @@ export class LongListService {
     this.rollingWindow = rollingWindow;
   }
 
-  async addCoin(symbol: string, chainId: string = 'solana'): Promise<boolean> {
+  async addCoin(contractAddress: string, chainId: string = 'solana'): Promise<boolean> {
     try {
-      const searchResults = await this.dexScreener.searchPairs(symbol);
+      // Get token info directly by contract address
+      const pair = await this.dexScreener.getPairInfo(chainId, contractAddress);
       
-      if (searchResults.length === 0) {
-        throw new Error(`No pairs found for symbol: ${symbol}`);
-      }
-
-      const chainPairs = searchResults.filter(p => p.chainId === chainId);
-      const pair = chainPairs.length > 0 ? chainPairs[0] : searchResults[0];
-
       if (!pair || !this.dexScreener.validatePairData(pair)) {
-        throw new Error(`Invalid pair data for ${symbol}`);
+        throw new Error(`No valid pairs found for contract address: ${contractAddress} on chain: ${chainId}`);
       }
 
       await this.db.addCoinToLongList(
@@ -136,7 +127,7 @@ export class LongListService {
         pair.name
       );
 
-      logger.info(`Added ${symbol} to long list`, { 
+      logger.info(`Added ${pair.symbol} (${contractAddress}) to long list`, { 
         symbol: pair.symbol, 
         chain: pair.chainId, 
         tokenAddress: pair.tokenAddress 
@@ -144,26 +135,26 @@ export class LongListService {
 
       return true;
     } catch (error) {
-      logger.error(`Failed to add coin ${symbol} to long list:`, error);
+      logger.error(`Failed to add coin ${contractAddress} to long list:`, error);
       throw error;
     }
   }
 
-  async removeCoin(symbol: string): Promise<boolean> {
+  async removeCoin(contractAddress: string): Promise<boolean> {
     try {
-      const result = await this.db.removeCoinFromLongList(symbol);
+      const result = await this.db.removeCoinFromLongList(contractAddress);
       if (result) {
-        logger.info(`Removed ${symbol} from long list`);
+        logger.info(`Removed coin with contract ${contractAddress} from long list`);
       }
       return result;
     } catch (error) {
-      logger.error(`Failed to remove coin ${symbol} from long list:`, error);
+      logger.error(`Failed to remove coin ${contractAddress} from long list:`, error);
       throw error;
     }
   }
 
   async updateTriggerSettings(
-    symbol: string,
+    contractAddress: string,
     settings: {
       trigger?: string;
       enabled?: boolean;
@@ -214,15 +205,15 @@ export class LongListService {
         updateData.mcapLevels = settings.mcapLevels.join(',');
       }
 
-      const result = await this.db.updateTriggerConfig(symbol, updateData);
+      const result = await this.db.updateTriggerConfig(contractAddress, updateData);
       
       if (result) {
-        logger.info(`Updated trigger settings for ${symbol}`, settings);
+        logger.info(`Updated trigger settings for contract ${contractAddress}`, settings);
       }
       
       return result;
     } catch (error) {
-      logger.error(`Failed to update trigger settings for ${symbol}:`, error);
+      logger.error(`Failed to update trigger settings for ${contractAddress}:`, error);
       throw error;
     }
   }

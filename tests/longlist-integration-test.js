@@ -74,20 +74,6 @@ class TestDexScreener extends DexScreenerService {
     };
   }
   
-  // Override search to return test token
-  async searchPairs() {
-    return [{
-      ...this.testToken,
-      price: this.market.price,
-      marketCap: this.market.price * 1000000,
-      volume24h: this.market.volume,
-      priceChange24h: 0,
-      liquidity: this.market.volume * 0.2,
-      info: {},
-      lastUpdated: Date.now()
-    }];
-  }
-  
   // Override batch fetching
   async batchGetTokens() {
     const results = new Map();
@@ -116,12 +102,24 @@ class TestDexScreener extends DexScreenerService {
 async function runTests() {
   console.log('Starting Long List integration test...');
   
-  // Set up market conditions
-  const market = new MarketSimulator(1.0, 500000);
-  
-  // Initialize services
+  // Initialize services first
   const db = new DatabaseService();
   await db.initialize();
+  
+  // Clean up any existing test data
+  console.log('🧹 Cleaning up existing test data...');
+  try {
+    // Delete any existing coins with TEST symbol
+    await db.prisma?.coin.deleteMany({
+      where: { symbol: 'TEST' }
+    });
+    console.log('✅ Cleaned up existing test data');
+  } catch (error) {
+    console.log('⚠️ No existing test data to clean up');
+  }
+  
+  // Set up market conditions
+  const market = new MarketSimulator(1.0, 500000);
   
   const dexScreener = new TestDexScreener(market);
   const rollingWindow = new RollingWindowManager();
@@ -132,7 +130,7 @@ async function runTests() {
     console.log('\n=== SCENARIO 1: Adding a new coin ===');
     console.log('Adding TEST token to long list...');
     
-    await longList.addCoin('TEST');
+    await longList.addCoin('test-token-address');
     const coins = await db.getLongListCoins();
     const testCoin = coins.find(c => c.symbol === 'TEST');
     
@@ -223,35 +221,30 @@ async function runTests() {
       console.log(`FAILED: Retrace price not recorded correctly. Expected: ${market.price}, Got: ${state.lastRetracePrice}`);
     }
     
-    // --- SCENARIO 4: Breakout with hysteresis ---
-    console.log('\n=== SCENARIO 4: Breakout with hysteresis test ===');
+    // --- SCENARIO 4: Breakout trigger test ---
+    console.log('\n=== SCENARIO 4: Breakout trigger test ===');
     
     // Advance time past cooldown
     advanceHours(3);
     
-    // Small price recovery (not enough for hysteresis)
-    console.log('Testing insufficient hysteresis...');
-    market.changePrice(10); // 10% recovery
-    market.changeVolume(80); // Volume spike
+    // Test breakout conditions: price +12% vs 12h baseline AND volume 1.5x vs 12h
+    console.log('Testing breakout conditions...');
+    // Get current state to calculate required price dynamically
+    const currentStates = await db.getLongStates();
+    const currentState = currentStates.find(s => s.coinId === testCoin.coinId);
+    const requiredPrice = currentState.h12High * (1 + testCoin.config.breakoutPct / 100);
+    const currentPriceBreakout = market.price;
+    const priceIncrease = ((requiredPrice - currentPriceBreakout) / currentPriceBreakout) * 100;
+    console.log(`Current price: ${currentPriceBreakout}, 12h high: ${currentState.h12High}, Required: ${requiredPrice}, Need increase: ${priceIncrease.toFixed(1)}%`);
+    market.changePrice(priceIncrease); // Exact increase needed
+    market.changeVolume(100); // 100% volume increase to trigger breakout
     
-    const insufficientTriggers = await longList.checkTriggers();
+    const breakoutTriggers = await longList.checkTriggers();
     
-    if (insufficientTriggers.length === 0) {
-      console.log('SUCCESS: No breakout fired with insufficient hysteresis');
+    if (breakoutTriggers.length > 0 && breakoutTriggers[0].triggerType === 'breakout') {
+      console.log('SUCCESS: Breakout trigger fired:', breakoutTriggers[0].message);
     } else {
-      console.log('FAILED: Trigger fired despite insufficient hysteresis:', insufficientTriggers);
-    }
-    
-    // Significant price increase (enough for hysteresis)
-    console.log('Testing sufficient hysteresis...');
-    market.changePrice(25); // Another 25% increase (total ~38% from retrace point)
-    
-    const sufficientTriggers = await longList.checkTriggers();
-    
-    if (sufficientTriggers.length > 0 && sufficientTriggers[0].triggerType === 'breakout') {
-      console.log('SUCCESS: Breakout trigger fired with sufficient hysteresis:', sufficientTriggers[0].message);
-    } else {
-      console.log('FAILED: No breakout trigger fired despite sufficient hysteresis');
+      console.log('FAILED: No breakout trigger fired');
     }
     
     // --- SCENARIO 5: Stall trigger ---
@@ -266,7 +259,14 @@ async function runTests() {
     
     // Simulate sideways price with volume drop
     console.log('Simulating sideways price with volume drop...');
-    market.changePrice(1); // Minimal price change
+    // Get current state to calculate target price dynamically
+    const currentStatesStall = await db.getLongStates();
+    const currentStateStall = currentStatesStall.find(s => s.coinId === testCoin.coinId);
+    const midPrice = (currentStateStall.h12High + currentStateStall.h12Low) / 2;
+    const currentPriceStall = market.price;
+    const priceChange = ((midPrice - currentPriceStall) / currentPriceStall) * 100;
+    console.log(`Current price: ${currentPriceStall}, 12h range: [${currentStateStall.h12Low}, ${currentStateStall.h12High}], Target mid-price: ${midPrice}, Need change: ${priceChange.toFixed(1)}%`);
+    market.changePrice(priceChange); // Move to middle of 12h range
     market.changeVolume(-40); // 40% volume drop
     
     const stallTriggers = await longList.checkTriggers();

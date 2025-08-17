@@ -192,20 +192,20 @@ export class TelegramService implements MessageSender {
     const welcomeText = `
 🚀 *Follow Coin Bot Started*
 
-This bot helps you track cryptocurrency price movements with:
+Track cryptocurrency movements with intelligent alerts:
 
-📊 *Long List* - Persistent monitoring with triggers
+📊 *Long List* - Persistent monitoring with smart triggers
 • Retracement alerts (price drops from highs)
-• Momentum stall detection
+• Momentum stall detection  
 • Breakout notifications
 • Market cap thresholds
 
-🔥 *Hot List* - Quick alerts for specific targets
-• Percentage change alerts
-• Market cap milestones  
+🔥 *Hot List* - Quick one-time alerts
+• Percentage change targets
+• Market cap milestones
 • 60% drawdown failsafe
 
-Use /help to see all available commands.
+💡 Use \`/help\` for quick command reference
 `;
 
     await this.sendMessage(msg.chat.id.toString(), welcomeText, 'MarkdownV2');
@@ -213,31 +213,31 @@ Use /help to see all available commands.
 
   private async handleHelp(msg: Message): Promise<void> {
     const helpText = `
-🤖 *Follow Coin Bot Commands*
+🤖 *Follow Coin Bot - Quick Reference*
 
-📊 *Long List \\(Persistent Monitoring\\)*
-• \`/long_add SYMBOL\` - Add coin to long list
-• \`/long_rm SYMBOL\` - Remove coin from long list  
-• \`/long_trigger [type] [on|off]\` - Toggle triggers
-• \`/long_set SYMBOL retrace=15\` - Set custom thresholds
-• \`/report_now\` - Generate immediate anchor report
+📊 *Long List Commands*
+• \`/long_add CONTRACT_ADDRESS\` - Add to persistent monitoring
+• \`/long_rm CONTRACT_ADDRESS\` - Remove from long list
+• \`/long_set CONTRACT_ADDRESS retrace=15\` - Configure triggers
+• \`/long_trigger retrace on|off\` - Toggle globally
+• \`/report_now\` - Generate status report
 
-🔥 *Hot List \\(Quick Alerts\\)*
-• \`/hot_add CONTRACT_ADDRESS ±% mcap=VALUE\` - Add with triggers
+🔥 *Hot List Commands*
+• \`/hot_add CONTRACT_ADDRESS ±% mcap=VALUE\` - Quick alerts
 • \`/hot_rm CONTRACT_ADDRESS\` - Remove from hot list
-• \`/hot_list\` - Show all hot list entries
-• \`/alerts\` - Show recent alerts
+• \`/hot_list\` - Show all entries
+• \`/alerts\` - Recent alerts
 
-📈 *Trigger Examples*
-• \`/hot_add 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU -15%\` - Alert when price drops 15%
-• \`/hot_add 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU +20%\` - Alert when price rises 20%
-• \`/hot_add 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU mcap=500K\` - Alert at 500K market cap
-• \`/hot_add 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU -10% mcap=1M\` - Both triggers
+⚙️ *Trigger Examples*
+• \`/long_set 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU retrace=20\`
+• \`/hot_add 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU -15%\`
+• \`/hot_add 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU mcap=500K\`
 
-💡 *Note:* 
-• Hot list requires at least one trigger \\(pct or mcap\\)
-• Use contract/mint addresses, not symbols
-• Supports Solana addresses \\(32-44 characters\\)
+💡 *Key Points*
+• Use contract addresses, not symbols
+• Long list: persistent monitoring with smart triggers
+• Hot list: one-time alerts for specific targets
+• All commands support Solana addresses
 `;
 
     await this.sendMessage(msg.chat.id.toString(), helpText, 'MarkdownV2');
@@ -245,53 +245,151 @@ Use /help to see all available commands.
 
   private async handleLongAdd(msg: Message, match: RegExpMatchArray | null): Promise<void> {
     const args = match?.[1]?.trim().split(/\s+/) || [];
-    const symbol = args[0];
+    const contractAddress = args[0];
 
-    if (!symbol) {
-      await this.sendMessage(msg.chat.id.toString(), 'Usage: /long_add SYMBOL');
+    if (!contractAddress) {
+      await this.sendMessage(
+        msg.chat.id.toString(), 
+        '❌ *Usage:* `/long_add CONTRACT_ADDRESS`\n\n' +
+        '*Example:* `/long_add 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU`\n\n' +
+        '*Note:* Use contract/mint addresses, not symbols',
+        'MarkdownV2'
+      );
+      return;
+    }
+
+    // Validate contract address format (basic check for Solana addresses)
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(contractAddress)) {
+      await this.sendMessage(
+        msg.chat.id.toString(), 
+        '❌ *Invalid contract address format*\n\n' +
+        'Please provide a valid Solana mint/contract address.\n' +
+        'Example: `7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU`',
+        'MarkdownV2'
+      );
       return;
     }
 
     try {
-      await this.longList.addCoin(symbol.toUpperCase());
-      await this.sendMessage(
-        msg.chat.id.toString(), 
-        `✅ Added ${symbol.toUpperCase()} to long list`
-      );
+      // Get token info directly by contract address
+      const pair = await this.dexScreener.getPairInfo('solana', contractAddress);
+      
+      if (!pair) {
+        await this.sendMessage(
+          msg.chat.id.toString(), 
+          '❌ *Token not found*\n\nNo trading pairs found for contract: `' + contractAddress + '`\n\n' +
+          'This usually means:\n' +
+          '• The contract address is incorrect\n' +
+          '• The token is not traded on Solana\n' +
+          '• The token has no liquidity',
+          'MarkdownV2'
+        );
+        return;
+      }
+
+      // Add to long list
+      await this.longList.addCoin(contractAddress);
+
+      // Show confirmation with token details
+      let message = `✅ *Added to Long List*\n\n`;
+      message += `*${pair.name} (${pair.symbol})*\n`;
+      message += `\`${contractAddress}\`\n\n`;
+      
+      const website = pair.info?.websites?.find((w: { url: string }) => w.url)?.url;
+      const socials = pair.info?.socials;
+      
+      let socialLinks = '';
+      if (socials) {
+        const twitter = socials.find((s: any) => s.platform === 'twitter');
+        const telegram = socials.find((s: any) => s.platform === 'telegram');
+        
+        if (website) socialLinks += `🌐(${website}) | `;
+        if (twitter) socialLinks += `🐦(${`https://twitter.com/${twitter.handle}`}) | `;
+        if (telegram) socialLinks += `✈️(${`https://t.me/${telegram.handle}`})`;
+        
+        if (socialLinks.endsWith(' | ')) {
+          socialLinks = socialLinks.slice(0, -3);
+        }
+      }
+      
+      if (socialLinks) {
+        message += `${socialLinks}\n\n`;
+      }
+      
+      message += `💰 Price: $${this.formatPrice(pair.price)}\n`;
+      message += `📊 Market Cap: ${Formatters.formatMarketCap(pair.marketCap || 0)}\n\n`;
+      
+      message += `🔴 *Default Settings:*\n`;
+      message += `• Retrace: 15% (from 72h high)\n`;
+      message += `• Stall: 30% vol drop + 5% band\n`;
+      message += `• Breakout: 12% + 1.5x volume\n`;
+      message += `• Market Cap: OFF\n\n`;
+      
+      message += `💡 Use \`/long_set ${contractAddress} retrace=20\` to customize`;
+
+      try {
+        await this.sendMessage(msg.chat.id.toString(), message, 'MarkdownV2');
+      } catch (sendError) {
+        logger.error('Failed to send confirmation message:', sendError);
+        try {
+          await this.bot.telegram.sendMessage(
+            msg.chat.id.toString(), 
+            '✅ Token added to long list successfully! Use `/long_set` to customize.'
+          );
+        } catch (fallbackError) {
+          logger.error('Fallback message also failed:', fallbackError);
+        }
+      }
+      
     } catch (error) {
+      logger.error('Error adding token to long list:', error);
       await this.sendMessage(
         msg.chat.id.toString(), 
-        `❌ Failed to add ${symbol}: ${error instanceof Error ? error.message : 'Unknown error'}`
+        `❌ *Failed to add token:* ${error instanceof Error ? error.message : 'Unknown error'}\n\n` +
+        'This might be due to:\n' +
+        '• Invalid contract address\n' +
+        '• Token not found on supported chains\n' +
+        '• Network issues',
+        'MarkdownV2'
       );
     }
   }
 
   private async handleLongRemove(msg: Message, match: RegExpMatchArray | null): Promise<void> {
     const args = match?.[1]?.trim().split(/\s+/) || [];
-    const symbol = args[0];
+    const contractAddress = args[0];
 
-    if (!symbol) {
-      await this.sendMessage(msg.chat.id.toString(), 'Usage: /long_rm SYMBOL');
+    if (!contractAddress) {
+      await this.sendMessage(
+        msg.chat.id.toString(), 
+        '❌ *Usage:* `/long_rm CONTRACT_ADDRESS`\n\n' +
+        '*Example:* `/long_rm 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU`\n\n' +
+        '*Note:* Use contract/mint addresses, not symbols',
+        'MarkdownV2'
+      );
       return;
     }
 
     try {
-      const removed = await this.longList.removeCoin(symbol.toUpperCase());
+      const removed = await this.longList.removeCoin(contractAddress);
       if (removed) {
         await this.sendMessage(
           msg.chat.id.toString(), 
-          `✅ Removed ${symbol.toUpperCase()} from long list`
+          `✅ *Removed from Long List*\n\nContract: \`${contractAddress}\`\n\nAll alerts for this token have been disabled.`,
+          'MarkdownV2'
         );
       } else {
         await this.sendMessage(
           msg.chat.id.toString(), 
-          `❌ ${symbol.toUpperCase()} not found in long list`
+          `❌ *Token not found*\n\nContract \`${contractAddress}\` is not in the long list.\n\nUse \`/long_add ${contractAddress}\` to add it first.`,
+          'MarkdownV2'
         );
       }
     } catch (error) {
       await this.sendMessage(
         msg.chat.id.toString(), 
-        `❌ Failed to remove ${symbol}: ${error instanceof Error ? error.message : 'Unknown error'}`
+        `❌ *Failed to remove token:* ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'MarkdownV2'
       );
     }
   }
@@ -337,13 +435,23 @@ Use /help to see all available commands.
 
   private async handleLongSet(msg: Message, match: RegExpMatchArray | null): Promise<void> {
     const args = match?.[1]?.trim().split(/\s+/) || [];
-    const symbol = args[0];
+    const contractAddress = args[0];
     const settings = args.slice(1);
 
-    if (!symbol || settings.length === 0) {
+    if (!contractAddress || settings.length === 0) {
       await this.sendMessage(
         msg.chat.id.toString(), 
-        'Usage: /long_set SYMBOL retrace=15 breakout=12 mcap=300000,1000000'
+        '❌ *Usage:* `/long_set CONTRACT_ADDRESS [param=value]...`\n\n' +
+        '*Examples:*\n' +
+        '• `/long_set 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU retrace=20`\n' +
+        '• `/long_set 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU breakout=15 stall_vol=25`\n' +
+        '• `/long_set 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU mcap=100000,500000,1000000`\n\n' +
+        '*Parameters:*\n' +
+        '• `retrace=15` - Retracement % from 72h high\n' +
+        '• `breakout=12` - Breakout % from 12h baseline\n' +
+        '• `stall_vol=30` - Volume drop % for stall detection\n' +
+        '• `mcap=100K,500K` - Market cap milestone levels',
+        'MarkdownV2'
       );
       return;
     }
@@ -371,23 +479,27 @@ Use /help to see all available commands.
         }
       }
 
-      const updated = await this.longList.updateTriggerSettings(symbol.toUpperCase(), updateData);
+      const updated = await this.longList.updateTriggerSettings(contractAddress, updateData);
       
       if (updated) {
         await this.sendMessage(
           msg.chat.id.toString(), 
-          `✅ Updated settings for ${symbol.toUpperCase()}`
+          `✅ *Settings Updated*\n\nContract: \`${contractAddress}\`\n\n` +
+          `Use \`/report_now\` to see current status.`,
+          'MarkdownV2'
         );
       } else {
         await this.sendMessage(
           msg.chat.id.toString(), 
-          `❌ ${symbol.toUpperCase()} not found in long list`
+          `❌ *Token not found*\n\nContract \`${contractAddress}\` is not in the long list.\n\nUse \`/long_add ${contractAddress}\` to add it first.`,
+          'MarkdownV2'
         );
       }
     } catch (error) {
       await this.sendMessage(
         msg.chat.id.toString(), 
-        `❌ Failed to update settings: ${error instanceof Error ? error.message : 'Unknown error'}`
+        `❌ *Failed to update settings:* ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'MarkdownV2'
       );
     }
   }
@@ -574,20 +686,18 @@ Use /help to see all available commands.
         return;
       }
 
-      // Fetch token data from DexScreener by contract address first
       let pair = await this.dexScreener.getPairInfo('solana', contractAddress);
       
-      // Fallback: try generic search if direct token lookup fails
       if (!pair) {
-        const pairs = await this.dexScreener.searchPairs(contractAddress);
-        if (!pairs || pairs.length === 0) {
-          await this.sendMessage(msg.chat.id.toString(), `❌ *Token not found*\n\nNo trading pairs found for contract: \`${contractAddress}\``, 'MarkdownV2');
-          return;
-        }
-        pair = pairs[0] || null;
-      }
-      if (!pair) {
-        await this.sendMessage(msg.chat.id.toString(), `❌ *Error*\n\nFailed to get token data for contract: \`${contractAddress}\``, 'MarkdownV2');
+        await this.sendMessage(
+          msg.chat.id.toString(), 
+          `❌ *Token not found*\n\nNo trading pairs found for contract: \`${contractAddress}\`\n\n` +
+          'This usually means:\n' +
+          '• The contract address is incorrect\n' +
+          '• The token is not traded on Solana\n' +
+          '• The token has no liquidity',
+          'MarkdownV2'
+        );
         return;
       }
 

@@ -27,6 +27,7 @@ describe('TelegramService', () => {
     service = new TelegramService(
       'mock-token',
       'mock-chat-id',
+      undefined, // groupChatId
       mockDb,
       mockLongList,
       mockHotList,
@@ -63,7 +64,7 @@ describe('TelegramService', () => {
 
       expect(service.sendMessage).toHaveBeenCalledWith(
         '123',
-        expect.stringContaining('\\(Persistent Monitoring\\)'),
+        expect.stringContaining('🤖 *Follow Coin Bot - Quick Reference*'),
         'MarkdownV2'
       );
     });
@@ -72,64 +73,79 @@ describe('TelegramService', () => {
   describe('handleLongAdd', () => {
     it('should add coin and send success message', async () => {
       const mockMsg = { chat: { id: 123 } } as Message;
-      const mockMatch = [ '', 'BTC' ] as RegExpMatchArray;
+      const mockMatch = [ '', '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU' ] as RegExpMatchArray;
+      
+      // Mock the DexScreener to return a valid pair
+      const mockPair: PairInfo = {
+        chainId: 'solana',
+        tokenAddress: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU',
+        symbol: 'TEST',
+        name: 'Test Token',
+        price: 1.0,
+        marketCap: 1000000,
+        volume24h: 500000,
+        priceChange24h: 5,
+        liquidity: 100000,
+        info: { websites: [], socials: [] },
+        lastUpdated: Date.now()
+      };
+      mockDexScreener.getPairInfo.mockResolvedValue(mockPair);
       mockLongList.addCoin.mockResolvedValue(true);
 
       await service['handleLongAdd'](mockMsg, mockMatch);
 
-      expect(mockLongList.addCoin).toHaveBeenCalledWith('BTC');
-      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('✅ Added BTC'));
+      expect(mockLongList.addCoin).toHaveBeenCalledWith('7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU');
+      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('✅ *Added to Long List*'), 'MarkdownV2');
     });
 
-    it('should handle missing symbol', async () => {
+    it('should handle missing contract address', async () => {
       const mockMsg = { chat: { id: 123 } } as Message;
       const mockMatch = null;
 
       await service['handleLongAdd'](mockMsg, mockMatch);
 
-      expect(service.sendMessage).toHaveBeenCalledWith('123', 'Usage: /long_add SYMBOL');
+      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('❌ *Usage:* `/long_add CONTRACT_ADDRESS`'), 'MarkdownV2');
     });
 
-    it('should handle error', async () => {
+    it('should handle invalid contract address format', async () => {
       const mockMsg = { chat: { id: 123 } } as Message;
-      const mockMatch = [ '', 'BTC' ] as RegExpMatchArray;
-      mockLongList.addCoin.mockRejectedValue(new Error('Add failed'));
+      const mockMatch = [ '', 'invalid' ] as RegExpMatchArray;
 
       await service['handleLongAdd'](mockMsg, mockMatch);
 
-      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('❌ Failed to add'));
+      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('❌ *Invalid contract address format*'), 'MarkdownV2');
     });
   });
 
   describe('handleLongRemove', () => {
     it('should remove coin and send success message', async () => {
       const mockMsg = { chat: { id: 123 } } as Message;
-      const mockMatch = [ '', 'BTC' ] as RegExpMatchArray;
+      const mockMatch = [ '', '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU' ] as RegExpMatchArray;
       mockLongList.removeCoin.mockResolvedValue(true);
 
       await service['handleLongRemove'](mockMsg, mockMatch);
 
-      expect(mockLongList.removeCoin).toHaveBeenCalledWith('BTC');
-      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('✅ Removed BTC'));
+      expect(mockLongList.removeCoin).toHaveBeenCalledWith('7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU');
+      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('✅ *Removed from Long List*'), 'MarkdownV2');
     });
 
     it('should handle coin not found', async () => {
       const mockMsg = { chat: { id: 123 } } as Message;
-      const mockMatch = [ '', 'BTC' ] as RegExpMatchArray;
+      const mockMatch = [ '', '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU' ] as RegExpMatchArray;
       mockLongList.removeCoin.mockResolvedValue(false);
 
       await service['handleLongRemove'](mockMsg, mockMatch);
 
-      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('❌ BTC not found'));
+      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('❌ *Token not found*'), 'MarkdownV2');
     });
 
-    it('should handle missing symbol', async () => {
+    it('should handle missing contract address', async () => {
       const mockMsg = { chat: { id: 123 } } as Message;
       const mockMatch = null;
 
       await service['handleLongRemove'](mockMsg, mockMatch);
 
-      expect(service.sendMessage).toHaveBeenCalledWith('123', 'Usage: /long_rm SYMBOL');
+      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('❌ *Usage:* `/long_rm CONTRACT_ADDRESS`'), 'MarkdownV2');
     });
   });
 
@@ -158,13 +174,13 @@ describe('TelegramService', () => {
   describe('handleLongSet', () => {
     it('should update settings and send success', async () => {
       const mockMsg = { chat: { id: 123 } } as Message;
-      const mockMatch = [ '', 'BTC retrace=15' ] as RegExpMatchArray;
+      const mockMatch = [ '', '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU retrace=15' ] as RegExpMatchArray;
       mockLongList.updateTriggerSettings.mockResolvedValue(true);
 
       await service['handleLongSet'](mockMsg, mockMatch);
 
-      expect(mockLongList.updateTriggerSettings).toHaveBeenCalledWith('BTC', { retracePct: 15 });
-      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('✅ Updated settings'));
+      expect(mockLongList.updateTriggerSettings).toHaveBeenCalledWith('7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU', { retracePct: 15 });
+      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('✅ *Settings Updated*'), 'MarkdownV2');
     });
 
     it('should handle invalid input', async () => {
@@ -173,7 +189,7 @@ describe('TelegramService', () => {
 
       await service['handleLongSet'](mockMsg, mockMatch);
 
-      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('Usage: /long_set'));
+      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('❌ *Usage:* `/long_set CONTRACT_ADDRESS [param=value]...`'), 'MarkdownV2');
     });
   });
 
@@ -218,13 +234,13 @@ describe('TelegramService', () => {
         info: { websites: [{ url: 'https://example.com' }], socials: [], imageUrl: 'mock.png' },
         lastUpdated: Date.now()
       };
-      mockDexScreener.searchPairs.mockResolvedValue([mockPair]);
+      mockDexScreener.getPairInfo.mockResolvedValue(mockPair);
       mockHotList.addEntry.mockResolvedValue(true);
 
       await service['handleHotAdd'](mockMsg, mockMatch);
 
-      expect(mockDexScreener.searchPairs).toHaveBeenCalledWith(testContract);
-      expect(mockHotList.addEntry).toHaveBeenCalledWith(testContract, mockPair, { pctTarget: -10, mcapTargets: [1000000] });
+      expect(mockDexScreener.getPairInfo).toHaveBeenCalledWith('solana', testContract);
+      expect(mockHotList.addEntry).toHaveBeenCalledWith(testContract, mockPair, { pctTargets: [-10], mcapTargets: [1000000] });
       expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('✅ *Token Added to Hot List*'), 'MarkdownV2');
     });
 
@@ -243,7 +259,7 @@ describe('TelegramService', () => {
 
       await service['handleHotAdd'](mockMsg, mockMatch);
 
-      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('❌ *Error:* You must specify at least one trigger criteria!'));
+      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('❌ *Error:* You must specify at least one trigger criteria!'), 'MarkdownV2');
     });
   });
 
@@ -258,7 +274,7 @@ describe('TelegramService', () => {
       await service['handleHotRemove'](mockMsg, mockMatch);
 
       expect(mockHotList.removeEntry).toHaveBeenCalledWith(testContract);
-      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('✅ Removed token'));
+      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('✅ Removed token with contract'), 'MarkdownV2');
     });
 
     it('should handle not found', async () => {
@@ -268,7 +284,7 @@ describe('TelegramService', () => {
 
       await service['handleHotRemove'](mockMsg, mockMatch);
 
-      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('❌ Token with contract'));
+      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('❌ Token with contract'), 'MarkdownV2');
     });
 
     it('should handle missing address', async () => {
@@ -277,7 +293,7 @@ describe('TelegramService', () => {
 
       await service['handleHotRemove'](mockMsg, mockMatch);
 
-      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('Usage: /hot_rm'));
+      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('Usage: /hot_rm CONTRACT_ADDRESS'), 'MarkdownV2');
     });
   });
 
@@ -291,16 +307,15 @@ describe('TelegramService', () => {
         symbol: 'TEST',
         name: 'Test',
         addedAtUtc: Date.now() / 1000,
-        anchorPrice: 1,
-        pctTarget: 10,
-        mcapTargets: [1000000],
+        websites: [{ label: 'Website', url: 'https://example.com' }],
+        socials: [{ label: 'Twitter', url: 'https://twitter.com/test' }],
         activeTriggers: [],
         failsafeFired: false
       }]);
 
       await service['handleHotList'](mockMsg);
 
-      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('🔥 *Hot List Entries*'), 'MarkdownV2');
+      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('🔥 Hot List Entries'), 'MarkdownV2', undefined, true);
     });
 
     it('should handle empty list', async () => {
@@ -309,7 +324,7 @@ describe('TelegramService', () => {
 
       await service['handleHotList'](mockMsg);
 
-      expect(service.sendMessage).toHaveBeenCalledWith('123', 'No coins in hot list');
+      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('🔥 *Hot list is empty*'), 'MarkdownV2');
     });
   });
 
@@ -329,7 +344,7 @@ describe('TelegramService', () => {
 
       await service['handleAlerts'](mockMsg);
 
-      expect(service.sendMessage).toHaveBeenCalledWith('123', 'No recent alerts');
+      expect(service.sendMessage).toHaveBeenCalledWith('123', 'No recent alerts', 'MarkdownV2');
     });
   });
 

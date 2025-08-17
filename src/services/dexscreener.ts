@@ -1,7 +1,6 @@
 import axios, { AxiosInstance, AxiosResponse } from 'axios';
 import { 
   DexScreenerResponse, 
-  DexScreenerSearchResponse,
   PairInfo,
   DexScreenerPair,
   ApiRateLimiter 
@@ -106,25 +105,6 @@ export class DexScreenerService {
     } catch (error) {
       logger.error(`Failed to fetch pairs for chain ${chainId}:`, { error, addresses: addressParam });
       throw new Error(`Failed to fetch pair data: ${error}`);
-    }
-  }
-
-  async searchPairs(query: string): Promise<PairInfo[]> {
-    try {
-      this.rateLimiter.recordRequest();
-      const response: AxiosResponse<DexScreenerSearchResponse> = await this.client.get(`/dex/search/?q=${encodeURIComponent(query)}`);
-      const pairs = response.data.pairs;
-      logger.info(`Found ${pairs?.length || 0} pairs for query "${query}"`, { query });
-
-      if (!pairs) {
-        logger.info(`No pairs found for query: ${query}`);
-        return [];
-      }
-
-      return response.data.pairs?.map(pair => this.transformPairData(pair)) || [];
-    } catch (error) {
-      logger.error(`Failed to search pairs for query ${query}:`, error);
-      throw new Error(`Failed to search pairs: ${error}`);
     }
   }
 

@@ -66,11 +66,6 @@ export interface DexScreenerResponse {
   pairs: DexScreenerPair[] | null;
 }
 
-export interface DexScreenerSearchResponse {
-  schemaVersion: string;
-  pairs: DexScreenerPair[] | null;
-}
-
 export interface PairInfo {
   chainId: string;
   // Base token contract/mint address (used for lookups when querying by token)

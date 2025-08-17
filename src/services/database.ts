@@ -63,13 +63,13 @@ export class DatabaseService {
       return coin.coinId;
     });
 
-    logger.info(`Added coin ${symbol} to long list with ID ${result}`);
+    logger.info(`Added coin ${symbol} (${tokenAddress}) to long list with ID ${result}`);
     return result;
   }
 
-  async removeCoinFromLongList(symbol: string): Promise<boolean> {
+  async removeCoinFromLongList(contractAddress: string): Promise<boolean> {
     const coin = await this.prisma.coin.findFirst({
-      where: { symbol },
+      where: { tokenAddress: contractAddress },
       include: { longWatch: true }
     });
 
@@ -81,7 +81,7 @@ export class DatabaseService {
       where: { coinId: coin.coinId }
     });
 
-    logger.info(`Removed coin ${symbol} from long list`);
+    logger.info(`Removed coin with contract ${contractAddress} from long list`);
     return true;
   }
 
@@ -333,7 +333,7 @@ export class DatabaseService {
   }
 
   async updateTriggerConfig(
-    symbol: string,
+    contractAddress: string,
     config: Partial<{
       retraceOn: boolean;
       stallOn: boolean;
@@ -348,7 +348,7 @@ export class DatabaseService {
     }>
   ): Promise<boolean> {
     const coin = await this.prisma.coin.findFirst({
-      where: { symbol },
+      where: { tokenAddress: contractAddress },
       include: { longWatch: true }
     });
 
