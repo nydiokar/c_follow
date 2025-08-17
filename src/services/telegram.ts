@@ -205,7 +205,7 @@ Track cryptocurrency movements with intelligent alerts:
 • Market cap milestones
 • 60% drawdown failsafe
 
-💡 Use \`/help\` for quick command reference
+💡 Use \`/help\` for quick command reference\n\n*Note:* \`/alerts\` shows current long list monitoring status
 `;
 
     await this.sendMessage(msg.chat.id.toString(), welcomeText, 'MarkdownV2');
@@ -226,7 +226,7 @@ Track cryptocurrency movements with intelligent alerts:
 • \`/hot_add CONTRACT_ADDRESS ±% mcap=VALUE\` - Quick alerts
 • \`/hot_rm CONTRACT_ADDRESS\` - Remove from hot list
 • \`/hot_list\` - Show all entries
-• \`/alerts\` - Recent alerts
+• \`/alerts\` - Current long list monitoring status
 
 ⚙️ *Long List Trigger Configuration*
 
@@ -922,48 +922,40 @@ Track cryptocurrency movements with intelligent alerts:
 
   private async handleAlerts(msg: Message): Promise<void> {
     try {
-      const alerts = await this.db.getAllRecentAlerts(20);
+      const activeCoins = await this.db.getActiveLongListStatus(20);
       
-      if (alerts.length === 0) {
-        await this.sendMessage(msg.chat.id.toString(), 'No recent alerts', 'MarkdownV2');
+      if (activeCoins.length === 0) {
+        await this.sendMessage(msg.chat.id.toString(), '📊 No coins in long list monitoring', 'MarkdownV2');
         return;
       }
 
-      let message = `🔔 *Recent Alerts \\(Hot + Long\\)*\n\n`;
+      let message = `📊 *Long List Monitoring Status*\n\n`;
       
-      for (const alert of alerts) {
-        const timestamp = new Date(alert.timestamp * 1000).toLocaleString('en-US', {
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-          hour12: false
-        });
+      for (const coin of activeCoins) {
+        const retrace = coin.retraceFrom72hHigh.toFixed(1);
+        const volume = this.formatVolume(coin.volume24h);
+        const mcap = this.formatMarketCap(coin.lastMcap);
         
-        const icon = alert.source === 'hot' ? '🔥' : '📊';
-        const typeIcon = {
-          'entry_added': '✅',
-          'pct': alert.kind.includes('+') ? '📈' : '📉',
-          'mcap': '💰',
-          'failsafe': '🛑'
-        }[alert.kind] || '⚠️';
-        
-        message += `${typeIcon} *${alert.symbol}* - ${alert.kind.charAt(0).toUpperCase() + alert.kind.slice(1)}\n`;
-        
-        if (alert.kind === 'entry_added') {
-          message += `   New token added to hot list\n`;
-        } else {
-          message += `   ${alert.message}\n`;
+        // Calculate volume change if 12h data is available
+        let volumeChange = '';
+        if (coin.volume12h > 0) {
+          const change = ((coin.volume24h - coin.volume12h) / coin.volume12h) * 100;
+          const changeIcon = change >= 0 ? '📈' : '📉';
+          volumeChange = ` (${changeIcon} ${change >= 0 ? '+' : ''}${change.toFixed(1)}%)`;
         }
         
-        message += `   ${timestamp}\n\n`;
+        message += `*${coin.symbol}* (${coin.name})\n`;
+        message += `   🔗 CA: \`${coin.contractAddress}\`\n`;
+        message += `   📊 MCap: ${mcap}\n`;
+        message += `   📈 24h Vol: ${volume}${volumeChange}\n`;
+        message += `   📉 From 72h High: ${retrace}%\n\n`;
       }
 
       await this.sendMessage(msg.chat.id.toString(), message, 'MarkdownV2');
     } catch (error) {
       await this.sendMessage(
         msg.chat.id.toString(), 
-        `❌ Failed to show alerts: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        `❌ Failed to show long list status: ${error instanceof Error ? error.message : 'Unknown error'}`,
         'MarkdownV2'
       );
     }

@@ -428,8 +428,8 @@ Displays complete command reference with examples.
 ##### `/hot_list` - Show Hot List
 Displays all active hot list entries with current status.
 
-##### `/alerts` - Recent Hot Alerts
-Shows recent hot list alert history.
+##### `/alerts` - Current Long List Status
+Shows current long list monitoring status (MCap, Volume, 72H High, Contract Address).
 
 ##### `/report_now` - Generate Anchor Report
 Forces immediate generation of long list status report.

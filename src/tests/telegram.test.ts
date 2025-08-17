@@ -36,6 +36,9 @@ describe('TelegramService', () => {
 
     // Mock sendMessage to just return true (successful send) by default
     jest.spyOn(service, 'sendMessage').mockResolvedValue(true);
+    
+    // Setup default mocks
+    mockDb.getActiveLongListStatus = jest.fn();
   });
 
   afterEach(() => {
@@ -329,22 +332,31 @@ describe('TelegramService', () => {
   });
 
   describe('handleAlerts', () => {
-    it('should send alerts with escaped MarkdownV2', async () => {
+    it('should send long list monitoring status with escaped MarkdownV2', async () => {
       const mockMsg = { chat: { id: 123 } } as Message;
-      mockDb.getAllRecentAlerts.mockResolvedValue([{ timestamp: Date.now() / 1000, symbol: 'TEST', kind: 'pct', message: 'Test', source: 'hot' }]);
+      mockDb.getActiveLongListStatus.mockResolvedValue([{ 
+        symbol: 'TEST',
+        name: 'Test Token',
+        contractAddress: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU',
+        lastPrice: 1.0,
+        lastMcap: 1000000,
+        retraceFrom72hHigh: -5.0,
+        volume24h: 500000,
+        volume12h: 400000
+      }]);
 
       await service['handleAlerts'](mockMsg);
 
-      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('\\(Hot + Long\\)'), 'MarkdownV2');
+      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('📊 *Long List Monitoring Status*'), 'MarkdownV2');
     });
 
-    it('should handle no alerts', async () => {
+    it('should handle no long list coins', async () => {
       const mockMsg = { chat: { id: 123 } } as Message;
-      mockDb.getAllRecentAlerts.mockResolvedValue([]);
+      mockDb.getActiveLongListStatus.mockResolvedValue([]);
 
       await service['handleAlerts'](mockMsg);
 
-      expect(service.sendMessage).toHaveBeenCalledWith('123', 'No recent alerts', 'MarkdownV2');
+      expect(service.sendMessage).toHaveBeenCalledWith('123', '📊 No coins in long list monitoring', 'MarkdownV2');
     });
   });
 

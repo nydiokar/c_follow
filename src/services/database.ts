@@ -411,6 +411,53 @@ export class DatabaseService {
     }
   }
 
+  async getActiveLongListStatus(limit: number = 50): Promise<Array<{
+    symbol: string;
+    name: string;
+    contractAddress: string;
+    lastPrice: number;
+    lastMcap: number;
+    retraceFrom72hHigh: number;
+    volume24h: number;
+    volume12h: number;
+  }>> {
+    try {
+      const activeCoins = await this.prisma.longWatch.findMany({
+        include: { 
+          coin: {
+            include: {
+              longState: true
+            }
+          }
+        },
+        orderBy: { addedAtUtc: 'desc' },
+        take: limit,
+      });
+
+      return activeCoins.map((watch: any) => {
+        const state = watch.coin.longState;
+        const retraceFrom72hHigh = state?.h72High && state?.lastPrice 
+          ? ((state.lastPrice - state.h72High) / state.h72High) * 100 
+          : 0;
+
+        return {
+          symbol: watch.coin.symbol,
+          name: watch.coin.name || watch.coin.symbol,
+          contractAddress: watch.coin.tokenAddress,
+          lastPrice: state?.lastPrice || 0,
+          lastMcap: state?.lastMcap || 0,
+          retraceFrom72hHigh,
+          volume24h: state?.v24Sum || 0,
+          volume12h: state?.v12Sum || 0
+        };
+      });
+    } catch (error) {
+      logger.error('Failed to get active long list status:', error);
+      throw error;
+    }
+  }
+
+
   async disconnect(): Promise<void> {
     // Disconnection handled by DatabaseManager
     logger.info('DatabaseService disconnected');

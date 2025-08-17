@@ -21,7 +21,7 @@ Follow Coin Bot provides a comprehensive set of Telegram commands for managing c
 - `/hot_add` - Add coin for percentage-based alerts
 - `/hot_rm` - Remove coin from hot list
 - `/hot_list` - Show all hot list entries
-- `/alerts` - View recent hot list alerts
+- `/alerts` - View recent long list alerts
 
 ## Detailed Command Reference
 
@@ -339,7 +339,7 @@ All hot alerts for this coin disabled.
 ```
 
 #### `/alerts`
-**Description:** Shows recent hot list alert history.
+**Description:** Shows current long list monitoring status (MCap, Volume, 72H High, Contract Address).
 
 **Usage:**
 ```
@@ -357,22 +357,19 @@ All hot alerts for this coin disabled.
 
 **Response:**
 ```
-🚨 Recent Hot List Alerts (last 10)
+📊 Long List Monitoring Status
 
-⚡ MEME +25% TARGET HIT - 14:25 UTC
-   $0.00012 → $0.00015 (+25.0%)
-   
-💰 PUMP $500K MCAP - 14:18 UTC  
-   Market cap milestone reached
-   
-🛡️ DUMP FAILSAFE -60% - 14:02 UTC
-   $0.025 → $0.010 (-60.0%)
-   
-⚡ SOL +15% TARGET HIT - 13:45 UTC
-   $98.00 → $112.70 (+15.0%)
+*TEST (Test Token)*
+   🔗 CA: `7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU`
+   📊 MCap: $1.0M
+   📈 24h Vol: 500.0K (📈 +25.0%)
+   📉 From 72h High: -5.0%
 
-📊 4 alerts in last 24h | 2 targets hit | 1 failsafe
-Use /hot_list to see current status.
+*SOL (Solana)*
+   🔗 CA: `So11111111111111111111111111111111111111112`
+   📊 MCap: $45.2B
+   📈 24h Vol: 2.1B (📉 -5.2%)
+   📉 From 72h High: -2.1%
 ```
 
 ## Advanced Usage

@@ -105,7 +105,7 @@ LOG_LEVEL=info
 /hot_add SYMBOL pct=-5 mcap=100000  # Add with targets
 /hot_rm SYMBOL                      # Remove from hot list
 /hot_list                          # Show all entries
-/alerts                            # Show recent alerts
+/alerts                            # Show current long list monitoring status (MCap, Volume, 72H High, Contract Address)
 ```
 
 ### Example Usage
@@ -120,7 +120,7 @@ LOG_LEVEL=info
 # Add to hot list with -10% alert and 1M market cap target
 /hot_add PEPE pct=-10 mcap=1000000
 
-# Check recent hot list alerts
+# Check current long list monitoring status
 /alerts
 ```
 
