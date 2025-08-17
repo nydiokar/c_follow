@@ -218,8 +218,8 @@ Track cryptocurrency movements with intelligent alerts:
 📊 *Long List Commands*
 • \`/long_add CONTRACT_ADDRESS\` - Add to persistent monitoring
 • \`/long_rm CONTRACT_ADDRESS\` - Remove from long list
-• \`/long_set CONTRACT_ADDRESS retrace=15\` - Configure triggers
-• \`/long_trigger retrace on|off\` - Toggle globally
+• \`/long_set CONTRACT_ADDRESS [param=value]...\` - Configure triggers
+• \`/long_trigger [retrace|stall|breakout|mcap] on|off\` - Toggle triggers globally
 • \`/report_now\` - Generate status report
 
 🔥 *Hot List Commands*
@@ -228,8 +228,30 @@ Track cryptocurrency movements with intelligent alerts:
 • \`/hot_list\` - Show all entries
 • \`/alerts\` - Recent alerts
 
-⚙️ *Trigger Examples*
+⚙️ *Long List Trigger Configuration*
+
+*Retrace Trigger:*
+• \`retrace=20\` - Alert when price drops 20% from 72h high
+• Default: 15% (triggers on significant pullbacks)
+
+*Breakout Trigger:*
+• \`breakout=15\` - Alert when price rises 15% from 12h baseline
+• \`breakout_vol=2.0\` - Require 2x volume increase (default: 1.5x)
+• Default: 12% price + 1.5x volume (momentum detection)
+
+*Stall Trigger:*
+• \`stall_vol=25\` - Alert when 24h volume drops 25% from 12h average
+• \`stall_band=3\` - Price must stay within 3% band over 12h
+• Default: 30% volume drop + 5% price band (consolidation detection)
+
+*Market Cap Trigger:*
+• \`mcap=100K,500K,1M\` - Alert at specific market cap levels
+• Comma-separated values (e.g., 100K, 500K, 1M)
+
+*Configuration Examples:*
 • \`/long_set 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU retrace=20\`
+• \`/long_set 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU breakout=15 stall_vol=25\`
+• \`/long_set 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU mcap=100K,500K,1M\`
 • \`/hot_add 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU -15%\`
 • \`/hot_add 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU mcap=500K\`
 
@@ -238,6 +260,7 @@ Track cryptocurrency movements with intelligent alerts:
 • Long list: persistent monitoring with smart triggers
 • Hot list: one-time alerts for specific targets
 • All commands support Solana addresses
+• Triggers have 2-hour cooldown to prevent spam
 `;
 
     await this.sendMessage(msg.chat.id.toString(), helpText, 'MarkdownV2');
@@ -402,7 +425,14 @@ Track cryptocurrency movements with intelligent alerts:
     if (!trigger || !state || !['retrace', 'stall', 'breakout', 'mcap'].includes(trigger) || !['on', 'off'].includes(state)) {
       await this.sendMessage(
         msg.chat.id.toString(), 
-        'Usage: /long_trigger [retrace|stall|breakout|mcap] [on|off]'
+        '❌ *Usage:* `/long_trigger [retrace|stall|breakout|mcap] [on|off]`\n\n' +
+        '*Examples:*\n' +
+        '• `/long_trigger retrace on` - Enable retrace triggers globally\n' +
+        '• `/long_trigger stall off` - Disable stall triggers globally\n' +
+        '• `/long_trigger breakout on` - Enable breakout triggers globally\n' +
+        '• `/long_trigger mcap off` - Disable market cap triggers globally\n\n' +
+        '*Note:* This affects ALL coins in the long list. Use `/long_set` for per-coin settings.',
+        'MarkdownV2'
       );
       return;
     }
@@ -423,7 +453,15 @@ Track cryptocurrency movements with intelligent alerts:
       
       await this.sendMessage(
         msg.chat.id.toString(), 
-        `✅ Global ${trigger} triggers ${enabled ? 'enabled' : 'disabled'}. Use /long_set for per-coin settings.`
+        `✅ *Global ${trigger} triggers ${enabled ? 'enabled' : 'disabled'}*\n\n` +
+        `This change affects ALL coins in the long list.\n\n` +
+        `*What ${trigger} triggers do:*\n` +
+        `${trigger === 'retrace' ? '• Alert when prices drop from 72h highs' : ''}` +
+        `${trigger === 'stall' ? '• Alert when volume declines + price consolidates' : ''}` +
+        `${trigger === 'breakout' ? '• Alert when price breaks out with volume surge' : ''}` +
+        `${trigger === 'mcap' ? '• Alert when market cap reaches milestone levels' : ''}\n\n` +
+        `💡 Use \`/long_set CONTRACT_ADDRESS\` for per-coin trigger settings.`,
+        'MarkdownV2'
       );
     } catch (error) {
       await this.sendMessage(
@@ -445,12 +483,19 @@ Track cryptocurrency movements with intelligent alerts:
         '*Examples:*\n' +
         '• `/long_set 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU retrace=20`\n' +
         '• `/long_set 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU breakout=15 stall_vol=25`\n' +
-        '• `/long_set 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU mcap=100000,500000,1000000`\n\n' +
-        '*Parameters:*\n' +
-        '• `retrace=15` - Retracement % from 72h high\n' +
-        '• `breakout=12` - Breakout % from 12h baseline\n' +
-        '• `stall_vol=30` - Volume drop % for stall detection\n' +
-        '• `mcap=100K,500K` - Market cap milestone levels',
+        '• `/long_set 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU mcap=100K,500K,1M`\n\n' +
+        '*Available Parameters:*\n' +
+        '• `retrace=15` - Alert when price drops 15% from 72h high (default: 15%)\n' +
+        '• `breakout=12` - Alert when price rises 12% from 12h baseline (default: 12%)\n' +
+        '• `breakout_vol=1.5` - Require 1.5x volume increase for breakout (default: 1.5x)\n' +
+        '• `stall_vol=30` - Alert when 24h volume drops 30% from 12h average (default: 30%)\n' +
+        '• `stall_band=5` - Price must stay within 5% band over 12h for stall (default: 5%)\n' +
+        '• `mcap=100K,500K` - Alert at specific market cap levels (comma-separated)\n\n' +
+        '*What Each Trigger Does:*\n' +
+        '• **Retrace**: Detects significant price pullbacks from recent highs\n' +
+        '• **Breakout**: Identifies momentum moves with volume confirmation\n' +
+        '• **Stall**: Spots consolidation periods with declining volume\n' +
+        '• **Market Cap**: Monitors for specific valuation milestones',
         'MarkdownV2'
       );
       return;

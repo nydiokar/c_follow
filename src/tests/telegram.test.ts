@@ -158,7 +158,7 @@ describe('TelegramService', () => {
       await service['handleLongTrigger'](mockMsg, mockMatch);
 
       expect(mockDb.updateGlobalTriggerSettings).toHaveBeenCalledWith({ globalRetraceOn: true });
-      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('✅ Global retrace triggers enabled'));
+      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('✅ *Global retrace triggers enabled*'), 'MarkdownV2');
     });
 
     it('should handle invalid input', async () => {
@@ -167,7 +167,7 @@ describe('TelegramService', () => {
 
       await service['handleLongTrigger'](mockMsg, mockMatch);
 
-      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('Usage: /long_trigger'));
+      expect(service.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('❌ *Usage:* `/long_trigger [retrace|stall|breakout|mcap] [on|off]`'), 'MarkdownV2');
     });
   });
 
