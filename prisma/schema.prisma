@@ -7,6 +7,25 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model MintEvent {
+  id                     Int      @id @default(autoincrement())
+  txSignature            String   @unique @map("tx_signature")
+  mint                   String
+  timestamp              BigInt   @map("timestamp")
+  decimals               Int?
+  isLaunchInitialization Boolean  @default(false) @map("is_launch_initialization")
+  isFirst                Boolean  @default(false) @map("is_first")
+  firstMintKey           String?  @unique @map("first_mint_key")
+  initProgram            String?  @map("init_program")
+  validatedBy            String?  @map("validated_by")
+  source                 String   @map("source")
+  rawJson                String?  @map("raw_json")
+
+  @@index([timestamp])
+  @@index([mint, timestamp])
+  @@map("mint_event")
+}
+
 model Coin {
   coinId            Int                @id @default(autoincrement()) @map("coin_id")
   chain             String

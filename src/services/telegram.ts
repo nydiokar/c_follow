@@ -9,6 +9,7 @@ import { logger } from '../utils/logger';
 import { PrismaClient } from '@prisma/client';
 import { Formatters } from '../utils/formatters';
 import { DatabaseManager } from '../utils/database';
+import { runMintReport } from './mintReport';
 
 export class TelegramService implements MessageSender {
   private bot: Telegraf<Context<Update>>;
@@ -58,6 +59,7 @@ export class TelegramService implements MessageSender {
     this.bot.command('list', this.handleHotListCommand.bind(this));
     this.bot.command('alerts', this.handleAlertsCommand.bind(this));
     this.bot.command('status', this.handleStatusCommand.bind(this));
+    this.bot.command('mints_24h', this.handleMints24hCommand.bind(this));
   }
 
   private registerEventHandlers(): void {
@@ -160,6 +162,16 @@ export class TelegramService implements MessageSender {
 
   private async handleStatusCommand(ctx: Context<Update>): Promise<void> {
     await this.handleStatus(ctx.message as Message);
+  }
+
+  private async handleMints24hCommand(ctx: Context<Update>): Promise<void> {
+    const chatId = ctx.chat!.id.toString();
+    try {
+      await this.sendMessage(chatId, '⏳ Generating 24h mint report...');
+      await runMintReport(this.dexScreener, this, process.env.TIMEZONE || 'UTC');
+    } catch (error) {
+      await this.sendMessage(chatId, `❌ Failed to generate mint report: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   }
 
   private async sendPaginatedMessage(chatId: string, text: string, parseMode?: 'MarkdownV2' | 'HTML') {

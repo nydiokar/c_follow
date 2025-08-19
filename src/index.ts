@@ -16,6 +16,8 @@ import { globalJobQueue } from './services/jobQueue';
 import { globalAlertBus } from './events/alertBus';
 import { globalErrorHandler, withErrorHandling, createErrorContext } from './utils/errorHandler';
 import { logger } from './utils/logger';
+import { registerHeliusWebhookRoutes } from './services/heliusWebhook';
+// On-demand report via Telegram command; no scheduler import here
 
 dotenv.config();
 
@@ -233,6 +235,8 @@ class FollowCoinBot {
         logger.error('Failed to start health check HTTP server:', error);
       }
 
+      // Mint 24H report is on-demand via /mints_24h; no scheduler setup
+
       // Trigger initial backfill for existing coins
       await globalJobQueue.addJob('initial_backfill', {}, { priority: 1 });
       globalJobQueue.addHandler({
@@ -292,6 +296,14 @@ class FollowCoinBot {
         pid: process.pid
       });
     });
+
+    // Register Helius webhook route
+    try {
+      registerHeliusWebhookRoutes(app);
+      logger.info('Helius webhook route registered at /webhooks/helius');
+    } catch (e) {
+      logger.error('Failed to register Helius webhook route', e);
+    }
 
     // Start the server
     app.listen(port, () => {
