@@ -76,6 +76,7 @@ export interface PairInfo {
   marketCap: number | null;
   volume24h: number;
   priceChange24h: number;
+  priceChange1h: number;
   liquidity: number | null;
   info?: {
     imageUrl?: string;

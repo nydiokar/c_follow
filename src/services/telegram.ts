@@ -165,7 +165,7 @@ export class TelegramService implements MessageSender {
   }
 
   private async handleMints24hCommand(ctx: Context<Update>): Promise<void> {
-    const chatId = ctx.chat!.id.toString();
+    const chatId = this.groupChatId || ctx.chat!.id.toString();
     try {
       await this.sendMessage(chatId, '⏳ Generating 24h mint report...');
       await runMintReport(this.dexScreener, this, process.env.TIMEZONE || 'UTC');
@@ -1094,6 +1094,12 @@ Track cryptocurrency movements with intelligent alerts:
     // Send to group chat if available, otherwise to admin
     const targetChatId = this.groupChatId || this.adminChatId;
     await this.sendMessage(targetChatId, message, 'MarkdownV2', fingerprint);
+  }
+
+  async sendToGroupOrAdmin(text: string, parseMode?: 'MarkdownV2' | 'HTML', fingerprint?: string): Promise<boolean> {
+    // Use the same logic as alerts: send to group chat if available, otherwise to admin
+    const targetChatId = this.groupChatId || this.adminChatId;
+    return await this.sendMessage(targetChatId, text, parseMode, fingerprint);
   }
 
   private formatVolume(volume: number): string {

@@ -81,31 +81,40 @@ export class DexScreenerService {
   async getPairsByChain(chainId: string, tokenAddresses: string[]): Promise<PairInfo[]> {
     if (tokenAddresses.length === 0) return [];
     
-    const addressParam = tokenAddresses.join(',');
-    // We query by token contract addresses using DexScreener token endpoint
-    const url = `/tokens/v1/${chainId}/${addressParam}`;
+    // DexScreener has URL length limits, batch requests with max 50 addresses per request
+    const MAX_ADDRESSES_PER_REQUEST = 50;
+    const allPairs: PairInfo[] = [];
     
-    try {
+    for (let i = 0; i < tokenAddresses.length; i += MAX_ADDRESSES_PER_REQUEST) {
+      const batch = tokenAddresses.slice(i, i + MAX_ADDRESSES_PER_REQUEST);
+      const addressParam = batch.join(',');
+      const url = `/tokens/v1/${chainId}/${addressParam}`;
       
+      try {
+        logger.debug(`Fetching batch ${Math.floor(i/MAX_ADDRESSES_PER_REQUEST) + 1}/${Math.ceil(tokenAddresses.length/MAX_ADDRESSES_PER_REQUEST)} for chain ${chainId}`, { 
+          addressCount: batch.length 
+        });
+        const response: AxiosResponse<DexScreenerResponse> = await this.client.get(url);
       
-      logger.info(`Fetching pairs for chain ${chainId}`, { addresses: addressParam });
-      const response: AxiosResponse<DexScreenerResponse> = await this.client.get(url);
-      
-      // The /tokens/v1 endpoint returns an array of pairs directly
-      const pairs = Array.isArray(response.data) ? response.data : (response.data as any)?.pairs;
-      
-      if (!pairs || pairs.length === 0) {
-        logger.warn(`No pairs returned for chain ${chainId}, addresses: ${addressParam}`);
-        return [];
-      }
+        // The /tokens/v1 endpoint returns an array of pairs directly
+        const pairs = Array.isArray(response.data) ? response.data : (response.data as any)?.pairs;
+        
+        if (!pairs || pairs.length === 0) {
+          logger.debug(`No pairs returned for batch ${Math.floor(i/MAX_ADDRESSES_PER_REQUEST) + 1}, addresses: ${addressParam}`);
+          continue;
+        }
 
-      
-      logger.debug(`Received ${pairs.length} pairs from API`, { pairs: pairs });
-      return pairs.map((pair: DexScreenerPair) => this.transformPairData(pair));
-    } catch (error) {
-      logger.error(`Failed to fetch pairs for chain ${chainId}:`, { error, addresses: addressParam });
-      throw new Error(`Failed to fetch pair data: ${error}`);
+        logger.debug(`Received ${pairs.length} pairs from batch ${Math.floor(i/MAX_ADDRESSES_PER_REQUEST) + 1}`);
+        const transformedPairs = pairs.map((pair: DexScreenerPair) => this.transformPairData(pair));
+        allPairs.push(...transformedPairs);
+      } catch (error) {
+        logger.error(`Failed to fetch batch ${Math.floor(i/MAX_ADDRESSES_PER_REQUEST) + 1} for chain ${chainId}:`, { error, addresses: addressParam });
+        // Continue with other batches instead of throwing
+        continue;
+      }
     }
+    
+    return allPairs;
   }
 
   async getPairInfo(chainId: string, tokenAddress: string): Promise<PairInfo | null> {
@@ -118,6 +127,7 @@ export class DexScreenerService {
     const marketCap = pair.marketCap || pair.fdv || null;
     const volume24h = pair.volume?.h24 || 0;
     const priceChange24h = pair.priceChange?.h24 || 0;
+    const priceChange1h = pair.priceChange?.h1 || 0;
     const liquidity = pair.liquidity?.usd || null;
 
     if (price <= 0) {
@@ -133,6 +143,7 @@ export class DexScreenerService {
       marketCap,
       volume24h,
       priceChange24h,
+      priceChange1h,
       liquidity,
       info: pair.info,
       lastUpdated: Date.now()
@@ -168,11 +179,7 @@ export class DexScreenerService {
       logger.info(`Large but valid price change for ${pairInfo.symbol}: ${pairInfo.priceChange24h}% with supporting volume`);
     }
     
-    // Check for volume anomalies
-    if (pairInfo.volume24h > 0 && pairInfo.marketCap && pairInfo.volume24h > pairInfo.marketCap * 3) {
-      logger.warn(`Suspicious volume for ${pairInfo.symbol}: ${pairInfo.volume24h} exceeds 3x market cap`);
-      return false;
-    }
+    // Volume can legitimately exceed market cap during dumps/pumps, no need to warn
     
     // Check for zero liquidity
     if (pairInfo.liquidity !== undefined && pairInfo.liquidity !== null && pairInfo.liquidity <= 0) {

@@ -23,7 +23,7 @@ function pruneSeenMints(now: number): void {
 function headerSecretOk(req: express.Request): boolean {
   const expected = process.env.HELIUS_WEBHOOK_SECRET;
   if (!expected) return true; // no secret configured → accept (dev mode)
-  const provided = (req.headers['x-helius-secret'] || req.headers['x-helio-secret'] || req.headers['x-helius-signature']) as string | undefined;
+  const provided = (req.headers['authorization'] || req.headers['x-helius-secret'] || req.headers['x-helio-secret'] || req.headers['x-helius-signature']) as string | undefined;
   if (!provided) return false;
   // Minimal check: exact match. If HMAC is desired, switch to raw-body verification.
   return provided === expected;
@@ -46,16 +46,24 @@ function programIdToInitProgram(programId: string | undefined): 'spl-token' | 't
 function findMintToMintAddress(instructions: AnyRecord[]): string | undefined {
   for (const ix of instructions) {
     const pid: string | undefined = ix.programId || ix.program || ix.parsed?.programId;
-    const parsedType: string | undefined = ix.parsed?.type || ix.parsed?.instructionType;
     const isTokenProgram = pid === SPL_TOKEN_PROGRAM_ID || pid === TOKEN_2022_PROGRAM_ID;
     if (!isTokenProgram) continue;
+    
+    // Check parsed instructions first (if available)
+    const parsedType: string | undefined = ix.parsed?.type || ix.parsed?.instructionType;
     const isMintTo = parsedType?.toLowerCase?.().startsWith('mintto');
-    if (!isMintTo) continue;
-    // SPL Token MintTo accounts layout: accounts[0] is the mint
-    const accounts: string[] | undefined = ix.accounts || ix.parsed?.info?.accounts || ix.parsed?.accounts;
-    if (Array.isArray(accounts) && accounts[0]) return accounts[0];
-    // Fallbacks seen in some payloads
-    if (ix.parsed?.info?.mint) return ix.parsed.info.mint;
+    if (isMintTo) {
+      const accounts: string[] | undefined = ix.accounts || ix.parsed?.info?.accounts || ix.parsed?.accounts;
+      if (Array.isArray(accounts) && accounts[0]) return accounts[0];
+      if (ix.parsed?.info?.mint) return ix.parsed.info.mint;
+    }
+    
+    // For unparsed TOKEN_MINT events: check if this looks like a MintTo
+    // MintTo instructions typically have 3+ accounts: [mint, destination, authority, ...]
+    if (!ix.parsed && Array.isArray(ix.accounts) && ix.accounts.length >= 3) {
+      // First account is typically the mint in MintTo instructions
+      return ix.accounts[0];
+    }
   }
   return undefined;
 }
@@ -93,7 +101,11 @@ export function registerHeliusWebhookRoutes(app: express.Express): void {
 
   app.post('/webhooks/helius', express.json({ limit: '1mb' }), async (req, res) => {
     try {
+      // Reduced logging
+      logger.debug('Webhook request', { bodyLength: JSON.stringify(req.body).length });
+      
       if (!headerSecretOk(req)) {
+        logger.warn('WEBHOOK AUTH FAILED', { headers: req.headers });
         return res.status(401).json({ ok: false, error: 'unauthorized' });
       }
 
@@ -102,15 +114,36 @@ export function registerHeliusWebhookRoutes(app: express.Express): void {
       const now = Date.now();
       pruneSeenMints(now);
 
+      // Process events with minimal logging
       for (const event of events) {
         const tx = event?.transaction || event; // tolerate both shapes
         const signature: string | undefined = tx?.signature || event?.signature;
         const timestampSec: number | undefined = tx?.timestamp || event?.timestamp;
+        
         if (!signature || !timestampSec) continue;
 
         const instructions = collectAllInstructions(tx);
         const mintAddress = findMintToMintAddress(instructions);
+        
         if (!mintAddress) continue;
+        
+        // Extract non-standard program IDs (ignore common ones)
+        const COMMON_PROGRAMS = [
+          'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', // SPL Token
+          'TokenzQdBNbLqP5VEh9xnFJz5dG27K7ivozsQJ4xxQh',  // Token 2022
+          'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL', // Associated Token
+          '11111111111111111111111111111111',              // System
+          'metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s',  // Metaplex
+          'ComputeBudget111111111111111111111111111111'    // Compute Budget
+        ];
+        
+        const allProgramIds = instructions.flatMap(ix => ix.programId || []).filter(Boolean);
+        const valuableProgramIds = [...new Set(allProgramIds)].filter(id => !COMMON_PROGRAMS.includes(id));
+        
+        logger.debug('TOKEN MINT', {
+          mint: mintAddress.slice(0, 8) + '...',
+          programs: valuableProgramIds.map(id => id.slice(0, 8) + '...')
+        });
 
         // Early dedupe by mint
         if (seenMints.has(mintAddress)) {
@@ -120,9 +153,13 @@ export function registerHeliusWebhookRoutes(app: express.Express): void {
         // Heuristic A: initializeMint and createAccount in same tx
         const heuristic = firstMintHeuristic(instructions, mintAddress);
 
-        // Accept only if heuristic passes for now (we can add B/C later)
+        // Accept only first-time mints (either strict heuristic OR new token detection)
         if (!heuristic.isLaunchInitialization) {
-          continue;
+          // Alternative: accept if mint address hasn't been seen before AND recent timestamp
+          if (seenMints.has(mintAddress)) {
+            continue; // Skip if we've seen this mint before
+          }
+          // Could add more filters here for pump.fun style detection
         }
 
         // Persist single isFirst row
@@ -133,17 +170,17 @@ export function registerHeliusWebhookRoutes(app: express.Express): void {
               mint: mintAddress,
               timestamp: BigInt(timestampSec * 1000), // store ms
               decimals: null,
-              isLaunchInitialization: true,
+              isLaunchInitialization: heuristic.isLaunchInitialization,
               isFirst: true,
               firstMintKey: mintAddress,
-              initProgram: heuristic.initProgram,
-              validatedBy: 'initHeuristic',
+              initProgram: heuristic.initProgram || 'unknown',
+              validatedBy: heuristic.isLaunchInitialization ? 'initHeuristic' : 'anyMint',
               source: 'webhook',
               rawJson: JSON.stringify(event)
             }
           });
           seenMints.set(mintAddress, now);
-          logger.info('Accepted first-mint event', { signature, mintAddress, initProgram: heuristic.initProgram });
+          logger.debug('Accepted first-mint event', { signature, mintAddress, initProgram: heuristic.initProgram });
         } catch (e: any) {
           // Unique violations mean we already captured it; ignore
           logger.debug('mintEvent create failed/duplicate', { error: e?.code || e?.message });

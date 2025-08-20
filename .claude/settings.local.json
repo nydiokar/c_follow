@@ -11,7 +11,8 @@
       "Bash(npm run build:*)",
       "Bash(npx prisma generate:*)",
       "Bash(npm run:*)",
-      "Bash(npm install)"
+      "Bash(npm install)",
+      "Bash(sqlite3:*)"
     ],
     "deny": [
       "Bash(rm:*)"
