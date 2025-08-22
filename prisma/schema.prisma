@@ -19,6 +19,7 @@ model MintEvent {
   initProgram            String?  @map("init_program")
   validatedBy            String?  @map("validated_by")
   source                 String   @map("source")
+  eventType              String?  @map("event_type")
   rawJson                String?  @map("raw_json")
 
   @@index([timestamp])

@@ -119,13 +119,17 @@ export function registerHeliusWebhookRoutes(app: express.Express): void {
         const tx = event?.transaction || event; // tolerate both shapes
         const signature: string | undefined = tx?.signature || event?.signature;
         const timestampSec: number | undefined = tx?.timestamp || event?.timestamp;
+        const eventType: string = event?.type || tx?.type || 'UNKNOWN';
+        const eventSource: string = event?.source || tx?.source || 'UNKNOWN';
         
         if (!signature || !timestampSec) continue;
 
         const instructions = collectAllInstructions(tx);
         const mintAddress = findMintToMintAddress(instructions);
         
-        if (!mintAddress) continue;
+        // For non-TOKEN_MINT events or events without mint addresses, 
+        // use transaction signature as identifier
+        const eventIdentifier = mintAddress || signature;
         
         // Extract non-standard program IDs (ignore common ones)
         const COMMON_PROGRAMS = [
@@ -140,50 +144,55 @@ export function registerHeliusWebhookRoutes(app: express.Express): void {
         const allProgramIds = instructions.flatMap(ix => ix.programId || []).filter(Boolean);
         const valuableProgramIds = [...new Set(allProgramIds)].filter(id => !COMMON_PROGRAMS.includes(id));
         
-        logger.debug('TOKEN MINT', {
-          mint: mintAddress.slice(0, 8) + '...',
+        logger.debug('EVENT RECEIVED', {
+          type: eventType,
+          source: eventSource,
+          identifier: eventIdentifier.slice(0, 8) + '...',
           programs: valuableProgramIds.map(id => id.slice(0, 8) + '...')
         });
 
-        // Early dedupe by mint
-        if (seenMints.has(mintAddress)) {
-          continue;
-        }
+        // Heuristic A: initializeMint and createAccount in same tx (only for mint events)
+        const heuristic = mintAddress ? firstMintHeuristic(instructions, mintAddress) : { isLaunchInitialization: false };
 
-        // Heuristic A: initializeMint and createAccount in same tx
-        const heuristic = firstMintHeuristic(instructions, mintAddress);
+        // Determine if this is a first occurrence (no duplicate check - capture everything)
+        const isFirstOccurrence = !seenMints.has(eventIdentifier);
 
-        // Accept only first-time mints (either strict heuristic OR new token detection)
-        if (!heuristic.isLaunchInitialization) {
-          // Alternative: accept if mint address hasn't been seen before AND recent timestamp
-          if (seenMints.has(mintAddress)) {
-            continue; // Skip if we've seen this mint before
-          }
-          // Could add more filters here for pump.fun style detection
-        }
-
-        // Persist single isFirst row
+        // Store ALL events, not just token mints
         try {
           await prisma.mintEvent.create({
             data: {
               txSignature: signature,
-              mint: mintAddress,
+              mint: mintAddress || eventIdentifier, // use eventIdentifier for non-mint events
               timestamp: BigInt(timestampSec * 1000), // store ms
               decimals: null,
               isLaunchInitialization: heuristic.isLaunchInitialization,
-              isFirst: true,
-              firstMintKey: mintAddress,
+              isFirst: isFirstOccurrence,
+              firstMintKey: isFirstOccurrence ? eventIdentifier : null,
               initProgram: heuristic.initProgram || 'unknown',
-              validatedBy: heuristic.isLaunchInitialization ? 'initHeuristic' : 'anyMint',
+              validatedBy: heuristic.isLaunchInitialization ? 'initHeuristic' : 'anyEvent',
               source: 'webhook',
+              eventType: `${eventType}:${eventSource}`,
               rawJson: JSON.stringify(event)
             }
           });
-          seenMints.set(mintAddress, now);
-          logger.debug('Accepted first-mint event', { signature, mintAddress, initProgram: heuristic.initProgram });
+          
+          // Mark as seen only if it's the first time
+          if (isFirstOccurrence) {
+            seenMints.set(eventIdentifier, now);
+          }
+          
+          logger.debug('Stored event', { 
+            signature: signature.slice(0, 8), 
+            identifier: eventIdentifier.slice(0, 8), 
+            isFirst: isFirstOccurrence,
+            type: eventType,
+            source: eventSource 
+          });
         } catch (e: any) {
-          // Unique violations mean we already captured it; ignore
-          logger.debug('mintEvent create failed/duplicate', { error: e?.code || e?.message });
+          // Log actual errors (not just duplicates)
+          if (e?.code !== 'P2002') { // P2002 is unique constraint violation
+            logger.error('Event storage failed', { error: e?.message, signature });
+          }
         }
       }
 
