@@ -17,6 +17,7 @@ import { globalAlertBus } from './events/alertBus';
 import { globalErrorHandler, withErrorHandling, createErrorContext } from './utils/errorHandler';
 import { logger } from './utils/logger';
 import { registerHeliusWebhookRoutes } from './services/heliusWebhook';
+import { WebSocketIngestService } from './services/ws';
 // On-demand report via Telegram command; no scheduler import here
 
 dotenv.config();
@@ -44,6 +45,7 @@ class FollowCoinBot {
   private backfill!: BackfillService;
   private config: AppConfig;
   private isShuttingDown = false;
+  private wsIngest: WebSocketIngestService | null = null;
 
   constructor() {
     try {
@@ -235,6 +237,17 @@ class FollowCoinBot {
         logger.error('Failed to start health check HTTP server:', error);
       }
 
+      // Optionally start WebSocket ingest (feature flag)
+      if ((process.env.WS_ENABLED || 'false') === 'true') {
+        try {
+          this.wsIngest = new WebSocketIngestService();
+          this.wsIngest.start();
+          logger.info('WebSocket ingest enabled');
+        } catch (e) {
+          logger.error('Failed to start WS ingest', e);
+        }
+      }
+
       // Mint 24H report is on-demand via /mints_24h; no scheduler setup
 
       // Trigger initial backfill for existing coins
@@ -378,6 +391,10 @@ class FollowCoinBot {
       if (this.db) {
         await this.db.disconnect();
         logger.info('Database service stopped');
+      }
+      if (this.wsIngest) {
+        this.wsIngest.stop();
+        logger.info('WS ingest stopped');
       }
     } catch (error) {
       logger.error('Error during service shutdown:', error);
