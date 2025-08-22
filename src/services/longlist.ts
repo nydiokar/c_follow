@@ -461,9 +461,20 @@ export class LongListService {
         tokenAddress: coin.tokenAddress
       }));
 
+      // Add SOL request to get SOL's 24h performance for comparison
+      tokenRequests.push({
+        chainId: 'solana',
+        tokenAddress: 'So11111111111111111111111111111111111111112' // SOL mint address
+      });
+
       const tokenData = await this.dexScreener.batchGetTokens(tokenRequests);
       const stateMap = new Map(states.map(s => [s.coinId, s]));
       const reportData: AnchorReportData[] = [];
+
+      // Get SOL data for performance comparison
+      const solKey = 'solana:So11111111111111111111111111111111111111112';
+      const solPair = tokenData.get(solKey);
+      const solChange24h = solPair?.priceChange24h || 0;
 
       for (const coin of coins) {
         const key = `${coin.chain}:${coin.tokenAddress}`;
@@ -477,16 +488,21 @@ export class LongListService {
         const retraceFrom72hHigh = state.h72High ? 
           ((state.h72High - pair.price) / state.h72High * 100) : 0;
 
+        // Calculate performance difference vs SOL
+        const solPerformanceDiff = pair.priceChange24h - solChange24h;
+
         reportData.push({
           symbol: pair.symbol,
           price: pair.price,
           change24h: pair.priceChange24h,
           retraceFrom72hHigh,
-          volume24h: pair.volume24h
+          volume24h: pair.volume24h,
+          solPerformanceDiff
         });
       }
 
-      reportData.sort((a, b) => b.retraceFrom72hHigh - a.retraceFrom72hHigh);
+      // Sort alphabetically by symbol instead of by retracement
+      reportData.sort((a, b) => a.symbol.localeCompare(b.symbol));
 
       return reportData;
     } catch (error) {

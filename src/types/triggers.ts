@@ -52,6 +52,7 @@ export interface AnchorReportData {
   change24h: number;
   retraceFrom72hHigh: number;
   volume24h: number;
+  solPerformanceDiff?: number;
 }
 
 export interface TriggerEvaluator {

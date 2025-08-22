@@ -575,17 +575,36 @@ Track cryptocurrency movements with intelligent alerts:
         hour12: false 
       });
 
-      let report = `📊 *Long List Snapshot* (${timestamp})\n\n`;
-      report += `\`Ticker    Price    24h Δ%   From 72h High   24h Vol\`\n`;
-      report += `\`────────────────────────────────────────────────────\`\n`;
+      // Calculate SOL data from the first coin's performance difference
+      // If first coin has +10% and solPerformanceDiff is +5%, then SOL is +5%
+      const firstCoin = reportData[0];
+      const solChange24h = firstCoin ? firstCoin.change24h - (firstCoin.solPerformanceDiff || 0) : 0;
+      
+      // We need to fetch SOL price separately - let's do a quick fetch
+      const solPair = await this.dexScreener.getPairInfo('solana', 'So11111111111111111111111111111111111111112');
+      const solPrice = solPair?.price || 0;
+      const solChangeStr = solChange24h >= 0 ? `+${solChange24h.toFixed(1)}` : solChange24h.toFixed(1);
+      
+      let report = `📊 *Long List Snapshot* (${timestamp})\n`;
+      report += `SOL: $${solPrice.toFixed(2)} (${solChangeStr}%)\n\n`;
+      report += `\`Ticker   Price (24h Δ%)     │72h High│ Vol  │vs SOL\`\n`;
+      report += `\`─────────────────────────────────────────────────────\`\n`;
 
       for (const coin of reportData) {
         const price = coin.price < 1 ? coin.price.toFixed(6) : coin.price.toFixed(4);
         const change24h = coin.change24h >= 0 ? `+${coin.change24h.toFixed(1)}` : coin.change24h.toFixed(1);
-        const retrace = coin.retraceFrom72hHigh.toFixed(1);
+        const priceWithDelta = `${price} (${change24h}%)`;
+        
+        // Fix the 72h high sign - negative retracement should show as negative
+        const retrace = coin.retraceFrom72hHigh >= 0 ? `+${coin.retraceFrom72hHigh.toFixed(1)}` : coin.retraceFrom72hHigh.toFixed(1);
+        
         const volume = Formatters.formatVolume(coin.volume24h);
         
-        report += `\`${coin.symbol.padEnd(8)} ${price.padStart(8)} ${change24h.padStart(7)}% ${retrace.padStart(6)}% ${volume.padStart(10)}\`\n`;
+        // Format vs SOL performance 
+        const solDiff = coin.solPerformanceDiff || 0;
+        const solDiffStr = solDiff >= 0 ? `+${solDiff.toFixed(1)}` : solDiff.toFixed(1);
+        
+        report += `\`${coin.symbol.padEnd(8)} ${priceWithDelta.padEnd(16)} │${retrace.padStart(6)}%│${volume.padStart(5)} │${solDiffStr.padStart(5)}%\`\n`;
       }
 
       await this.sendMessage(msg.chat.id.toString(), report, 'MarkdownV2');

@@ -77,7 +77,11 @@ export async function runMintReport(
       const info = resultMap.get(key);
       if (!info || !info.marketCap || !info.liquidity || info.liquidity <= 0) continue;
       const mcap = info.marketCap;
-      if (mcap >= minCap && mcap <= maxCap) {
+      const liquidity = info.liquidity;
+      const volume24h = info.volume24h || 0;
+      
+      // Apply filters: market cap range, liquidity > $12k, volume > $100k
+      if (mcap >= minCap && mcap <= maxCap && liquidity > 12000 && volume24h > 100000) {
         const item: {
           symbol: string;
           mcap: number;
@@ -122,7 +126,7 @@ export async function runMintReport(
     let msg = `🆕 Token Mints (last 24h) — ${tsLocal}\n`;
     msg += `📊 ${rows.length} total mints → ${items.length} within range $${minCap.toLocaleString()} - $${maxCap.toLocaleString()}\n\n`;
 
-    for (let i = 0; i < Math.min(items.length, 50); i++) {
+    for (let i = 0; i < items.length; i++) {
       const it = items[i]!;
       const priceStr = it.price < 1 ? it.price.toFixed(6) : it.price.toFixed(4);
       const liqStr = `$${Math.round(it.liquidity).toLocaleString()}`;
@@ -148,7 +152,7 @@ export async function runMintReport(
     const fingerprint = `mint24h_${Math.floor(nowMs / 1000)}`;
     // Use the same routing logic as sendTriggerAlert and sendHotAlert
     await telegram.sendToGroupOrAdmin(msg, undefined, fingerprint);
-    logger.info(`Mint report sent with ${items.length} tokens (showing up to 50)`);
+    logger.info(`Mint report sent with ${items.length} tokens`);
   } catch (error) {
     logger.error('Mint report failed', { error });
   }
