@@ -43,7 +43,18 @@ function programIdToInitProgram(programId: string | undefined): 'spl-token' | 't
   return undefined;
 }
 
-function findMintToMintAddress(instructions: AnyRecord[]): string | undefined {
+function findMintToMintAddress(instructions: AnyRecord[], event?: AnyRecord): string | undefined {
+  // BEST: Check tokenTransfers array first - this is the most reliable
+  if (event?.tokenTransfers && Array.isArray(event.tokenTransfers)) {
+    const transfers = event.tokenTransfers;
+    for (const transfer of transfers) {
+      if (transfer.mint && transfer.tokenStandard === 'Fungible') {
+        return transfer.mint;
+      }
+    }
+  }
+
+  // Fallback 1: Try the original instruction parsing logic
   for (const ix of instructions) {
     const pid: string | undefined = ix.programId || ix.program || ix.parsed?.programId;
     const isTokenProgram = pid === SPL_TOKEN_PROGRAM_ID || pid === TOKEN_2022_PROGRAM_ID;
@@ -65,6 +76,17 @@ function findMintToMintAddress(instructions: AnyRecord[]): string | undefined {
       return ix.accounts[0];
     }
   }
+  
+  // Fallback 2: extract mint address from description if available
+  if (event?.description) {
+    const description = event.description as string;
+    // Pattern: "ADDRESS minted X tokens" - extract the ADDRESS part
+    const match = description.match(/^([A-Za-z0-9]{32,44})\s+minted\s+/);
+    if (match && match[1]) {
+      return match[1];
+    }
+  }
+  
   return undefined;
 }
 
@@ -125,11 +147,35 @@ export function registerHeliusWebhookRoutes(app: express.Express): void {
         if (!signature || !timestampSec) continue;
 
         const instructions = collectAllInstructions(tx);
-        const mintAddress = findMintToMintAddress(instructions);
+        const mintAddress = findMintToMintAddress(instructions, event);
         
-        // For non-TOKEN_MINT events or events without mint addresses, 
-        // use transaction signature as identifier
-        const eventIdentifier = mintAddress || signature;
+        // Skip events with no mint address at all (not token-related)
+        if (!mintAddress) {
+          continue; // Skip transactions with no token mint
+        }
+
+        // Skip NFTs - we only want fungible tokens
+        const tokenStandard = event?.tokenStandard || tx?.tokenStandard;
+        if (tokenStandard === 'ProgrammableNonFungible' || tokenStandard === 'NonFungible') {
+          continue; // Skip NFTs
+        }
+
+        // Skip common system tokens (wrapped SOL, USDC, etc.)
+        const SYSTEM_TOKENS = [
+          'So11111111111111111111111111111112',  // Wrapped SOL
+          'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',  // USDC
+          'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',  // USDT
+          '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R',  // RAY
+          'SRMuApVNdxXokk5GT7XD5cUUgXMBCoAz2LHeuAoKWRt',   // SRM
+          'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So',   // mSOL
+        ];
+        
+        if (SYSTEM_TOKENS.includes(mintAddress)) {
+          continue; // Skip system tokens
+        }
+
+        // Use mint address as identifier for all events with actual mints
+        const eventIdentifier = mintAddress;
         
         // Extract non-standard program IDs (ignore common ones)
         const COMMON_PROGRAMS = [
