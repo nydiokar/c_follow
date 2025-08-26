@@ -8,6 +8,8 @@ yarn-error.log*
 dist/
 build/
 node_modules/
+.claude/settings.local.json
+claude/
 
 # Environment variables
 .env

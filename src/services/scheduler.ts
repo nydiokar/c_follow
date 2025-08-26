@@ -3,6 +3,9 @@ import { DatabaseService } from './database';
 import { LongListService } from './longlist';
 import { HotListService } from './hotlist';
 import { TelegramService } from './telegram';
+import { DexScreenerService } from './dexscreener';
+import { TokenProcessorService } from './tokenProcessor';
+import { Formatters } from '../utils/formatters';
 import { logger } from '../utils/logger';
 
 export interface SchedulerConfig {
@@ -16,6 +19,7 @@ export class SchedulerService {
   private longList: LongListService;
   private hotList: HotListService;
   private telegram: TelegramService;
+  private dexScreener: DexScreenerService;
   private tasks: cron.ScheduledTask[] = [];
   private timezone: string;
   private isRunning = false;
@@ -25,12 +29,14 @@ export class SchedulerService {
     longList: LongListService,
     hotList: HotListService,
     telegram: TelegramService,
+    dexScreener: DexScreenerService,
     timezone: string = 'UTC'
   ) {
     this.db = db;
     this.longList = longList;
     this.hotList = hotList;
     this.telegram = telegram;
+    this.dexScreener = dexScreener;
     this.timezone = timezone;
   }
 
@@ -59,10 +65,14 @@ export class SchedulerService {
     const hotIntervalMinutes = parseInt(process.env.HOT_LIST_INTERVAL_MINUTES || '1') || config.hotIntervalMinutes;
     this.setupHotChecks(hotIntervalMinutes);
 
+    // Setup token processing every 3 hours
+    this.setupTokenProcessing();
+
     logger.info('Scheduled tasks:', {
       anchorTimes: config.anchorTimesLocal,
       longCheckpointHours: config.longCheckpointHours,
-      hotIntervalMinutes: hotIntervalMinutes
+      hotIntervalMinutes: hotIntervalMinutes,
+      tokenProcessing: 'Every 3 hours'
     });
   }
 
@@ -87,7 +97,8 @@ export class SchedulerService {
   }
 
   private setupLongCheckpoints(intervalHours: number): void {
-    const cronExpression = `0 */${intervalHours} * * *`;
+    // Run 5 minutes after token processing to avoid conflicts
+    const cronExpression = `5 */${intervalHours} * * *`;
     
     const task = cron.schedule(cronExpression, async () => {
       await this.runLongCheckpoint();
@@ -98,7 +109,7 @@ export class SchedulerService {
     
     this.tasks.push(task);
     
-    logger.info(`Scheduled long list checkpoints every ${intervalHours} hours`);
+    logger.info(`Scheduled long list checkpoints every ${intervalHours} hours (5 minutes after token processing)`);
   }
 
   private setupHotChecks(intervalMinutes: number): void {
@@ -114,6 +125,22 @@ export class SchedulerService {
     this.tasks.push(task);
     
     logger.info(`Scheduled hot list checks every ${intervalMinutes} minutes`);
+  }
+
+  private setupTokenProcessing(): void {
+    // Run every 3 hours
+    const cronExpression = `0 */3 * * *`;
+    
+    const task = cron.schedule(cronExpression, async () => {
+      await this.runTokenProcessing();
+    }, {
+      scheduled: true,
+      timezone: this.timezone
+    });
+    
+    this.tasks.push(task);
+    
+    logger.info(`Scheduled token processing every 3 hours`);
   }
 
   private async runAnchorReport(): Promise<void> {
@@ -132,22 +159,40 @@ export class SchedulerService {
         hour12: false 
       });
 
-      let report = `📊 *Long List Anchor Report* (${timestamp})\n\n`;
-      report += `\`Ticker    Price    24h Δ%   From 72h High   24h Vol\`\n`;
-      report += `\`────────────────────────────────────────────────────\`\n`;
+      // Calculate SOL data from the first coin's performance difference
+      // If first coin has +10% and solPerformanceDiff is +5%, then SOL is +5%
+      const firstCoin = reportData[0];
+      const solChange24h = firstCoin ? firstCoin.change24h - (firstCoin.solPerformanceDiff || 0) : 0;
+      
+      // We need to fetch SOL price separately - let's do a quick fetch
+      const solPair = await this.dexScreener.getPairInfo('solana', 'So11111111111111111111111111111111111111112');
+      const solPrice = solPair?.price || 0;
+      const solChangeStr = solChange24h >= 0 ? `+${solChange24h.toFixed(1)}` : solChange24h.toFixed(1);
+      
+      let report = `📊 *Long List Snapshot* (${timestamp})\n`;
+      report += `SOL: $${solPrice.toFixed(2)} (${solChangeStr}%)\n\n`;
+      report += `\`Ticker   Price (24h Δ%)     │72h High│ Vol  │vs SOL\`\n`;
+      report += `\`─────────────────────────────────────────────────────\`\n`;
 
       for (const coin of reportData) {
         const price = coin.price < 1 ? coin.price.toFixed(6) : coin.price.toFixed(4);
         const change24h = coin.change24h >= 0 ? `+${coin.change24h.toFixed(1)}` : coin.change24h.toFixed(1);
-        const retrace = coin.retraceFrom72hHigh.toFixed(1);
-        const volume = this.formatVolume(coin.volume24h);
+        const priceWithDelta = `${price} (${change24h}%)`;
         
-        report += `\`${coin.symbol.padEnd(8)} ${price.padStart(8)} ${change24h.padStart(7)}% ${retrace.padStart(6)}% ${volume.padStart(10)}\`\n`;
+        // Fix the 72h high sign - negative retracement should show as negative
+        const retrace = coin.retraceFrom72hHigh >= 0 ? `+${coin.retraceFrom72hHigh.toFixed(1)}` : coin.retraceFrom72hHigh.toFixed(1);
+        
+        const volume = Formatters.formatVolume(coin.volume24h);
+        
+        // Format vs SOL performance 
+        const solDiff = coin.solPerformanceDiff || 0;
+        const solDiffStr = solDiff >= 0 ? `+${solDiff.toFixed(1)}` : solDiff.toFixed(1);
+        
+        report += `\`${coin.symbol.padEnd(8)} ${priceWithDelta.padEnd(16)} │${retrace.padStart(6)}%│${volume.padStart(5)} │${solDiffStr.padStart(5)}%\`\n`;
       }
 
       const fingerprint = `anchor_report_${Math.floor(Date.now() / 1000)}`;
-      await this.telegram.sendMessage(
-        process.env.TELEGRAM_CHAT_ID!,
+      await this.telegram.sendToGroupOrAdmin(
         report,
         'MarkdownV2',
         fingerprint
@@ -194,6 +239,21 @@ export class SchedulerService {
       logger.info(`Hot check completed with ${alerts.length} alerts`);
     } catch (error) {
       logger.error('Failed to run hot check:', error);
+    }
+  }
+
+  private async runTokenProcessing(): Promise<void> {
+    try {
+      logger.info('Running token processing...');
+      
+      // Create dedicated DexScreener instance for token processing to avoid conflicts
+      const dedicatedDexScreener = new DexScreenerService();
+      const processor = new TokenProcessorService(dedicatedDexScreener);
+      await processor.runIncrementalProcessing();
+      
+      logger.info('Token processing completed successfully');
+    } catch (error) {
+      logger.error('Failed to run token processing:', error);
     }
   }
 

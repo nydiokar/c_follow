@@ -94,12 +94,24 @@ class FollowCoinBot {
     });
 
     process.on('SIGTERM', () => {
-      logger.info('SIGTERM received, initiating graceful shutdown');
+      logger.warn('SIGTERM received - possible process manager restart or system shutdown');
+      logger.info('Process info at shutdown:', {
+        uptime: process.uptime(),
+        memory: process.memoryUsage(),
+        pid: process.pid,
+        ppid: process.ppid
+      });
       this.gracefulShutdown(0);
     });
 
     process.on('SIGINT', () => {
-      logger.info('SIGINT received, initiating graceful shutdown');
+      logger.warn('SIGINT received - manual termination or monitoring system intervention');
+      logger.info('Process info at shutdown:', {
+        uptime: process.uptime(),
+        memory: process.memoryUsage(),
+        pid: process.pid,
+        ppid: process.ppid
+      });
       this.gracefulShutdown(0);
     });
   }
@@ -124,17 +136,7 @@ class FollowCoinBot {
         tradingAlerts: this.config.telegramGroupChatId ? 'Group chat' : 'Admin chat'
       });
 
-      // Send startup message to group if configured
-      if (this.config.telegramGroupChatId) {
-        await this.telegram.sendMessage(
-          this.config.telegramGroupChatId,
-          '🚀 **Follow Coin Bot is now online!**\n\n' +
-          '✅ Health monitoring active\n' +
-          '✅ Trading alerts enabled\n' +
-          '✅ Commands ready\n\n' +
-          'Use /help to see available commands'
-        );
-      }
+      // Startup message removed - only send on /start command to avoid spam
 
 
     } catch (error) {
@@ -204,6 +206,7 @@ class FollowCoinBot {
       this.longList,
       this.hotList,
       this.telegram,
+      this.dexScreener,
       this.config.timezone
     );
 
@@ -415,17 +418,7 @@ async function main(): Promise<void> {
     await bot.start();
     
     // Keep the process alive - the bot needs to stay running
-    
-    // Set up graceful shutdown
-    process.on('SIGINT', async () => {
-      logger.info('Received SIGINT, shutting down gracefully...');
-      await bot.gracefulShutdown(0);
-    });
-    
-    process.on('SIGTERM', async () => {
-      logger.info('Received SIGTERM, shutting down gracefully...');
-      await bot.gracefulShutdown(0);
-    });
+    // Note: Signal handlers are already set up in the FollowCoinBot constructor
     
     // Keep the process alive indefinitely
     await new Promise(() => {

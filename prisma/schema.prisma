@@ -21,9 +21,13 @@ model MintEvent {
   source                 String   @map("source")
   eventType              String?  @map("event_type")
   rawJson                String?  @map("raw_json")
+  processedAt            BigInt?  @map("processed_at")
+  scamStatus             String?  @map("scam_status")
+  processAttempts        Int      @default(0) @map("process_attempts")
 
   @@index([timestamp])
   @@index([mint, timestamp])
+  @@index([processedAt, scamStatus])
   @@map("mint_event")
 }
 

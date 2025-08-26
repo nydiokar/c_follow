@@ -101,6 +101,12 @@ export class HotListService {
   private db: DatabaseService;
   private dexScreener: DexScreenerService;
   private evaluator: HotListEvaluator;
+  
+  // Health monitoring for 2-minute checks
+  private static lastCheckTime: number = 0;
+  private static checksInLastHour: number = 0;
+  private static failsInLastHour: number = 0;
+  private static lastHourlyReport: number = 0;
   private prisma = DatabaseManager.getInstance();
 
   constructor(db: DatabaseService, dexScreener: DexScreenerService) {
@@ -266,6 +272,10 @@ export class HotListService {
   }
 
   async checkAlerts(): Promise<HotAlert[]> {
+    const now = Date.now();
+    HotListService.lastCheckTime = now;
+    HotListService.checksInLastHour++;
+    
     try {
       const entries = await this.getActiveEntries();
       
@@ -318,12 +328,48 @@ export class HotListService {
         }
       }
 
-      logger.info(`Checked ${entries.length} hot list entries, found ${alerts.length} alerts`);
+      if (alerts.length > 0) {
+        logger.info(`Checked ${entries.length} hot list entries, found ${alerts.length} alerts`);
+      } else {
+        logger.debug(`Checked ${entries.length} hot list entries, found ${alerts.length} alerts`);
+      }
+      
+      // Report hourly summary
+      this.maybeLogHourlySummary();
+      
       return alerts;
     } catch (error) {
+      HotListService.failsInLastHour++;
       logger.error('Failed to check hot list alerts:', error);
       throw error;
     }
+  }
+
+  private maybeLogHourlySummary(): void {
+    const now = Date.now();
+    const hoursSinceLastReport = (now - HotListService.lastHourlyReport) / (1000 * 60 * 60);
+    
+    if (hoursSinceLastReport >= 1.0) {
+      const expectedChecks = Math.floor(60 / 2); // Every 2 minutes = 30 checks per hour
+      const actualChecks = HotListService.checksInLastHour;
+      const fails = HotListService.failsInLastHour;
+      const successRate = actualChecks > 0 ? ((actualChecks - fails) / actualChecks * 100).toFixed(1) : '0.0';
+      
+      logger.info(`Hot list health: ${actualChecks}/${expectedChecks} checks completed (${successRate}% success) in last hour`);
+      
+      // Reset counters
+      HotListService.checksInLastHour = 0;
+      HotListService.failsInLastHour = 0;
+      HotListService.lastHourlyReport = now;
+    }
+  }
+
+  static getHealthStatus(): { lastCheck: number; checksInLastHour: number; failsInLastHour: number } {
+    return {
+      lastCheck: HotListService.lastCheckTime,
+      checksInLastHour: HotListService.checksInLastHour,
+      failsInLastHour: HotListService.failsInLastHour
+    };
   }
 
   async listEntries(): Promise<HotListEntry[]> {

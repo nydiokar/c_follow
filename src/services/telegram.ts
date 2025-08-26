@@ -780,6 +780,10 @@ Track cryptocurrency movements with intelligent alerts:
       // Add to hot list
       await this.hotList.addEntry(contractAddress, pair, options);
 
+      // Get all targets for this token to show complete view
+      const allEntries = await this.hotList.listEntries();
+      const currentEntry = allEntries.find(e => e.contractAddress === contractAddress);
+
       // Show confirmation with actual token data
       let message = `✅ *Token Added to Hot List*\n\n`;
 
@@ -811,8 +815,9 @@ Track cryptocurrency movements with intelligent alerts:
       message += `💰 Price: $${this.formatPrice(pair.price)}\n`;
       message += `📊 Market Cap: ${Formatters.formatMarketCap(pair.marketCap || 0)}\n`;
 
+      // Show the current targets being added prominently
       if (options.pctTargets && options.pctTargets.length > 0) {
-        message += `\n📈 Targets:\n`;
+        message += `\n📈 **Current Target${options.pctTargets.length > 1 ? 's' : ''}:**\n`;
         for (const pctTarget of options.pctTargets) {
           const targetPrice = pair.price * (1 + pctTarget / 100);
           message += `   - $${this.formatPrice(targetPrice)} (${pctTarget > 0 ? '+' : ''}${pctTarget}%)\n`;
@@ -820,10 +825,32 @@ Track cryptocurrency movements with intelligent alerts:
       }
       
       if (options.mcapTargets && options.mcapTargets.length > 0) {
-        message += `\n🎯 MCAP Targets:\n`;
+        message += `\n🎯 **Current MCAP Target${options.mcapTargets.length > 1 ? 's' : ''}:**\n`;
         for (const mcapTarget of options.mcapTargets) {
           message += `   - ${Formatters.formatMarketCap(mcapTarget)}\n`;
         }
+      }
+
+      // Show all existing targets for this token
+      if (currentEntry && currentEntry.activeTriggers.length > 0) {
+        message += `\n📊 **All Targets for this token:**\n`;
+        
+        // Group triggers by type and show all
+        const pctTriggers = currentEntry.activeTriggers.filter(t => t.kind === 'pct');
+        const mcapTriggers = currentEntry.activeTriggers.filter(t => t.kind === 'mcap');
+        
+        for (const trigger of pctTriggers) {
+          const status = trigger.fired ? '✅' : '⏳';
+          const targetPrice = trigger.anchorPrice * (1 + trigger.value / 100);
+          message += `${status} Target: ${trigger.value > 0 ? '+' : ''}${trigger.value}% ($${this.formatPrice(targetPrice)})\n`;
+        }
+        
+        for (const trigger of mcapTriggers) {
+          const status = trigger.fired ? '✅' : '⏳';
+          message += `${status} MCAP: ${Formatters.formatMarketCap(trigger.value)}\n`;
+        }
+        
+        message += `${currentEntry.failsafeFired ? '🚨' : '🛡️'} Failsafe: ${currentEntry.failsafeFired ? 'FIRED' : 'Active'}\n`;
       }
       
        try {
@@ -935,11 +962,45 @@ Track cryptocurrency movements with intelligent alerts:
   private async handleStatus(msg: Message): Promise<void> {
     try {
       const hotEntries = await this.hotList.listEntries();
+      const longEntries = await this.db.getLongListCoins();
+      const memory = process.memoryUsage();
+      
+      // Format uptime nicely
+      const uptimeSeconds = Math.floor(process.uptime());
+      const hours = Math.floor(uptimeSeconds / 3600);
+      const minutes = Math.floor((uptimeSeconds % 3600) / 60);
+      const seconds = uptimeSeconds % 60;
+      const uptimeStr = hours > 0 
+        ? `${hours}h ${minutes}m ${seconds}s`
+        : minutes > 0 
+          ? `${minutes}m ${seconds}s`
+          : `${seconds}s`;
+      
+      // Get hot list health if available
+      const hotHealth = (this.hotList.constructor as any).getHealthStatus?.() || null;
       
       let message = `📊 *Bot Status*\n\n`;
+      message += `⏰ *Uptime:* ${uptimeStr}\n`;
+      message += `💾 *Memory:* ${Math.round(memory.heapUsed / 1024 / 1024)}MB used\n`;
+      message += `🤖 *Process:* ${process.pid}\n\n`;
+      
       message += `🔥 *Hot List:* ${hotEntries.length} entries\n`;
-      message += `⏰ *Uptime:* ${process.uptime().toFixed(0)}s\n`;
-      message += `🔄 *Node Env:* ${process.env.NODE_ENV || 'development'}\n`;
+      if (hotHealth && hotHealth.lastCheck > 0) {
+        const lastCheckMins = Math.floor((Date.now() - hotHealth.lastCheck) / (1000 * 60));
+        message += `   └ Last check: ${lastCheckMins < 5 ? '✅' : '⚠️'} ${lastCheckMins}m ago\n`;
+        if (hotHealth.checksInLastHour > 0) {
+          message += `   └ Checks this hour: ${hotHealth.checksInLastHour}\n`;
+        }
+      }
+      
+      message += `📈 *Long List:* ${longEntries.length} coins tracking\n`;
+      
+      // Add scheduler health indicator (basic check)
+      const now = new Date();
+      const nextHour = new Date(now.getTime() + 60 * 60 * 1000);
+      const schedulerHealth = uptimeSeconds > 300 ? '✅' : '🔄'; // Running > 5 mins
+      message += `⚙️ *Scheduler:* ${schedulerHealth} Active\n`;
+      message += `🕐 *Next tasks:* ${nextHour.getHours().toString().padStart(2, '0')}:00`;
       
       await this.sendMessage(msg.chat.id.toString(), message, 'MarkdownV2');
     } catch (error) {

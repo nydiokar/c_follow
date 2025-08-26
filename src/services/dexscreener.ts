@@ -6,6 +6,7 @@ import {
   ApiRateLimiter 
 } from '../types/dexscreener';
 import { logger } from '../utils/logger';
+import { JupiterTokenService } from './jupiterToken';
 
 class RateLimiter implements ApiRateLimiter {
   private requests: number[] = [];
@@ -40,6 +41,7 @@ export class DexScreenerService {
   private readonly client: AxiosInstance;
   private readonly rateLimiter: ApiRateLimiter;
   private readonly baseURL = 'https://api.dexscreener.com';
+  private readonly jupiterFallback: JupiterTokenService;
 
   constructor(rateLimitMs: number = 200) {
     this.client = axios.create({
@@ -52,6 +54,7 @@ export class DexScreenerService {
     });
 
     this.rateLimiter = new RateLimiter(300, 60000);
+    this.jupiterFallback = new JupiterTokenService();
 
     this.client.interceptors.request.use(async (config) => {
       while (!this.rateLimiter.canMakeRequest()) {
@@ -68,11 +71,15 @@ export class DexScreenerService {
     this.client.interceptors.response.use(
       (response) => response,
       (error) => {
-        logger.error('DexScreener API error:', {
-          url: error.config?.url,
-          status: error.response?.status,
-          message: error.message
-        });
+        // Clean up rate limit errors - don't log full URLs
+        if (error.response?.status === 429) {
+          logger.debug('DexScreener rate limit hit - retrying...');
+        } else {
+          logger.error('DexScreener API error:', {
+            status: error.response?.status,
+            message: error.message
+          });
+        }
         return Promise.reject(error);
       }
     );
@@ -108,7 +115,11 @@ export class DexScreenerService {
         const transformedPairs = pairs.map((pair: DexScreenerPair) => this.transformPairData(pair));
         allPairs.push(...transformedPairs);
       } catch (error) {
-        logger.error(`Failed to fetch batch ${Math.floor(i/MAX_ADDRESSES_PER_REQUEST) + 1} for chain ${chainId}:`, { error, addresses: addressParam });
+        const batchNum = Math.floor(i/MAX_ADDRESSES_PER_REQUEST) + 1;
+        logger.error(`Failed to fetch DexScreener batch ${batchNum} for ${chainId}:`, { 
+          error: error instanceof Error ? error.message : String(error),
+          tokenCount: batch.length 
+        });
         // Continue with other batches instead of throwing
         continue;
       }
@@ -131,7 +142,7 @@ export class DexScreenerService {
     const liquidity = pair.liquidity?.usd || null;
 
     if (price <= 0) {
-      logger.warn(`Invalid price for pair ${pair.tokenAddress}: ${price}`);
+      logger.debug(`Invalid price for pair ${pair.tokenAddress}: ${price}`);
     }
 
     return {
@@ -153,7 +164,7 @@ export class DexScreenerService {
   validatePairData(pairInfo: PairInfo): boolean {
     // Basic validation
     if (!pairInfo.price || pairInfo.price <= 0) {
-      logger.warn(`Invalid price for ${pairInfo.symbol}: ${pairInfo.price}`);
+      logger.debug(`Invalid price for ${pairInfo.symbol}: ${pairInfo.price}`);
       return false;
     }
 
@@ -194,6 +205,7 @@ export class DexScreenerService {
     // tokenAddress here is actually the token contract/mint address used to add entries
     const results = new Map<string, PairInfo | null>();
     const chainGroups = new Map<string, string[]>();
+    const failedRequests: Array<{ chainId: string; tokenAddress: string }> = [];
 
     for (const req of requests) {
       const addresses = chainGroups.get(req.chainId) || [];
@@ -201,9 +213,16 @@ export class DexScreenerService {
       chainGroups.set(req.chainId, addresses);
     }
 
+    // Try DexScreener first
     for (const [chainId, tokenAddresses] of chainGroups) {
       try {
         const pairs = await this.getPairsByChain(chainId, tokenAddresses);
+        // Only log for large batches (mint reports), not hot list checks
+        if (tokenAddresses.length >= 20) {
+          logger.info(`DexScreener returned ${pairs.length} pairs for ${tokenAddresses.length} ${chainId} tokens`);
+        } else {
+          logger.debug(`DexScreener returned ${pairs.length} pairs for ${tokenAddresses.length} ${chainId} tokens`);
+        }
 
         // Build selection per token address: choose best pair by liquidity, then 24h volume
         const bestByToken = new Map<string, PairInfo>();
@@ -220,16 +239,62 @@ export class DexScreenerService {
             bestByToken.set(key, p);
           }
         }
+        if (tokenAddresses.length >= 20) {
+          logger.info(`DexScreener found ${bestByToken.size} best tokens for ${chainId}`);
+        } else {
+          logger.debug(`DexScreener found ${bestByToken.size} best tokens for ${chainId}`);
+        }
 
         for (const tokenAddr of tokenAddresses) {
           const key = `${chainId}:${tokenAddr}`;
-          results.set(key, bestByToken.get(tokenAddr) || null);
+          const result = bestByToken.get(tokenAddr);
+          if (result) {
+            results.set(key, result);
+          } else {
+            // Mark failed tokens for Jupiter fallback
+            failedRequests.push({ chainId, tokenAddress: tokenAddr });
+          }
         }
       } catch (error) {
         logger.error(`Failed to fetch batch for chain ${chainId}:`, error);
+        // Add all tokens from this chain to failed requests for Jupiter fallback
         for (const tokenAddr of tokenAddresses) {
-          const key = `${chainId}:${tokenAddr}`;
-          results.set(key, null);
+          failedRequests.push({ chainId, tokenAddress: tokenAddr });
+        }
+      }
+    }
+
+    // Fallback to Jupiter for failed requests
+    if (failedRequests.length > 0) {
+      if (failedRequests.length >= 20) {
+        logger.info(`DexScreener failed for ${failedRequests.length} tokens, trying Jupiter fallback`);
+      } else {
+        logger.debug(`DexScreener failed for ${failedRequests.length} tokens, trying Jupiter fallback`);
+      }
+      try {
+        const jupiterResults = await this.jupiterFallback.batchGetTokens(failedRequests);
+        
+        // Merge Jupiter results into main results
+        for (const [key, value] of jupiterResults) {
+          if (!results.has(key)) { // Only add if not already resolved by DexScreener
+            results.set(key, value);
+          }
+        }
+        
+        const jupiterSuccessCount = Array.from(jupiterResults.values()).filter(v => v !== null).length;
+        if (failedRequests.length >= 20) {
+          logger.info(`Jupiter fallback resolved ${jupiterSuccessCount}/${failedRequests.length} tokens`);
+        } else {
+          logger.debug(`Jupiter fallback resolved ${jupiterSuccessCount}/${failedRequests.length} tokens`);
+        }
+      } catch (error) {
+        logger.error('Jupiter fallback also failed:', error);
+        // Set remaining failed requests to null
+        for (const req of failedRequests) {
+          const key = `${req.chainId}:${req.tokenAddress}`;
+          if (!results.has(key)) {
+            results.set(key, null);
+          }
         }
       }
     }

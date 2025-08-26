@@ -1,7 +1,7 @@
 {
   "name": "follow-coin-bot",
-  "version": "0.3.0",
-  "description": "Telegram bot for cryptocurrency tracking with Long List and Hot List functionality",
+  "version": "0.4.2",
+  "description": "Telegram bot for cryptocurrency tracking with Long List and Hot List functionality and 24h mints",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",

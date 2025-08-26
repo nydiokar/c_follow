@@ -9,8 +9,8 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR/.."
 HEALTH_CHECK_PORT="${HEALTH_CHECK_PORT:-3002}"
-CHECK_INTERVAL="${CHECK_INTERVAL:-300}"  # 5 minutes
-MAX_FAILURES="${MAX_FAILURES:-3}"        # Alert after 3 consecutive failures
+CHECK_INTERVAL="${CHECK_INTERVAL:-60}"   # 1 minute - faster detection
+MAX_FAILURES="${MAX_FAILURES:-2}"       # Alert after 2 consecutive failures
 LOG_FILE="$PROJECT_ROOT/logs/monitor.log"
 ALERT_LOG="$PROJECT_ROOT/logs/monitor-alerts.log"
 
@@ -145,7 +145,9 @@ main() {
     
     local consecutive_failures=0
     local last_alert_time=0
-    local alert_cooldown=1800  # 30 minutes between alerts
+    local alert_cooldown=300   # 5 minutes between duplicate alerts (reduced from 30 mins)
+    local last_restart_time=0
+    local restart_cooldown=300 # 5 minutes between restart attempts (reduced from 10 mins)
     
     while true; do
         local current_time=$(date +%s)
@@ -160,12 +162,14 @@ main() {
         # Check bot health
         if check_bot_health; then
             health_ok=true
-            consecutive_failures=0
             
+            # If bot was previously down, send recovery notification
             if [ $consecutive_failures -gt 0 ]; then
-                log "Bot is back online"
-                send_telegram_alert "Bot is back online and responding to health checks" "info"
+                log "✅ Bot is back online after $consecutive_failures failed checks"
+                send_telegram_alert "✅ Bot is back online and responding to health checks" "info"
             fi
+            
+            consecutive_failures=0  # Reset failure count
         else
             consecutive_failures=$((consecutive_failures + 1))
             warn "Bot health check failed (attempt $consecutive_failures/$MAX_FAILURES)"
@@ -180,29 +184,38 @@ main() {
             error "❌ Bot is completely offline"
         fi
         
-        # Send alert if needed
+        # Send alert and restart if needed
         if [ $consecutive_failures -ge $MAX_FAILURES ]; then
             local time_since_last_alert=$((current_time - last_alert_time))
+            local time_since_last_restart=$((current_time - last_restart_time))
             
+            # Send alert (with shorter cooldown)
             if [ $time_since_last_alert -ge $alert_cooldown ]; then
                 local alert_message="Bot is offline for $consecutive_failures consecutive health checks"
                 
                 if [ "$pm2_ok" = false ]; then
-                    alert_message="Bot PM2 process is not running"
+                    alert_message="🚨 CRITICAL: Bot PM2 process is not running - attempting restart"
                 elif [ "$health_ok" = false ]; then
-                    alert_message="Bot health check is failing (PM2 process may be stuck)"
+                    alert_message="🚨 CRITICAL: Bot health check is failing - attempting restart"
                 fi
                 
-                if send_telegram_alert "$alert_message" "critical"; then
-                    last_alert_time=$current_time
-                    
-                    # Try to restart if it's been offline for a while
-                    if [ $consecutive_failures -ge 6 ]; then  # 30 minutes offline
-                        restart_bot
-                    fi
+                # Always send alert immediately when bot goes down
+                send_telegram_alert "$alert_message" "critical"
+                last_alert_time=$current_time
+            fi
+            
+            # Try to restart immediately after MAX_FAILURES - no cooldown on first restart attempt
+            if [ $last_restart_time -eq 0 ] || [ $time_since_last_restart -ge $restart_cooldown ]; then
+                warn "Bot has been down for $consecutive_failures checks - attempting immediate restart"
+                if restart_bot; then
+                    last_restart_time=$current_time
+                    consecutive_failures=0  # Reset on successful restart
+                else
+                    error "Restart failed - will try again in $restart_cooldown seconds"
+                    last_restart_time=$current_time
                 fi
             else
-                warn "Alert cooldown active (${alert_cooldown}s remaining)"
+                warn "Restart cooldown active ($(($restart_cooldown - $time_since_last_restart))s remaining)"
             fi
         fi
         
