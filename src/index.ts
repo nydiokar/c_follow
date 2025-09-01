@@ -18,6 +18,8 @@ import { globalErrorHandler, withErrorHandling, createErrorContext } from './uti
 import { logger } from './utils/logger';
 import { registerHeliusWebhookRoutes } from './services/heliusWebhook';
 import { WebSocketIngestService } from './services/ws';
+import { globalMemoryMonitor } from './services/memoryMonitor';
+import { globalDatabaseCleanup } from './services/databaseCleanup';
 // On-demand report via Telegram command; no scheduler import here
 
 dotenv.config();
@@ -221,6 +223,9 @@ class FollowCoinBot {
       // Start background services
       globalJobQueue.start();
       
+      // Start memory monitoring
+      globalMemoryMonitor.start();
+      
       await withErrorHandling(
         () => this.scheduler.start(),
         createErrorContext('scheduler_start')
@@ -274,17 +279,29 @@ class FollowCoinBot {
     // Health check endpoint - lightweight, no database queries
     app.get('/health', (req: express.Request, res: express.Response) => {
       try {
+        const memStats = globalMemoryMonitor.getStats();
         const stats = {
-          status: 'healthy',
+          status: memStats.analysis.memoryPressure === 'critical' ? 'unhealthy' : 'healthy',
           uptime: process.uptime(),
           timestamp: new Date().toISOString(),
           version: process.env.npm_package_version || '1.0.0',
           environment: this.config.nodeEnv,
           pid: process.pid,
           memory: {
-            used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
-            total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
-            external: Math.round(process.memoryUsage().external / 1024 / 1024)
+            rss: memStats.current.rss,
+            heapUsed: memStats.current.heapUsed,
+            heapTotal: memStats.current.heapTotal,
+            external: memStats.current.external,
+            arrayBuffers: memStats.current.arrayBuffers,
+            pressure: memStats.analysis.memoryPressure,
+            largestComponent: memStats.analysis.largestComponent,
+            externalToHeapRatio: memStats.analysis.externalToHeapRatio
+          },
+          trends: {
+            heapGrowthRateMBPerHour: memStats.trends.heapGrowthRate,
+            externalGrowthRateMBPerHour: memStats.trends.externalGrowthRate,
+            rssGrowthRateMBPerHour: memStats.trends.rssGrowthRate,
+            memoryLeakWarning: memStats.trends.memoryLeakWarning
           },
           // Simple process health indicators
           process: {
@@ -313,6 +330,84 @@ class FollowCoinBot {
       });
     });
 
+    // Memory analysis endpoint with detailed breakdown
+    app.get('/memory', (_req: express.Request, res: express.Response) => {
+      try {
+        const memStats = globalMemoryMonitor.getStats();
+        const breakdown = globalMemoryMonitor.getMemoryBreakdown();
+        
+        res.json({
+          current: memStats.current,
+          analysis: memStats.analysis,
+          trends: memStats.trends,
+          history: memStats.history, // Last 2 hours
+          breakdown: breakdown,
+          recommendations: breakdown.recommendations
+        });
+      } catch (error) {
+        res.status(500).json({
+          error: error instanceof Error ? error.message : 'Unknown error',
+          timestamp: new Date().toISOString()
+        });
+      }
+    });
+
+    // Force GC and analyze memory impact (debugging endpoint)
+    app.post('/memory/gc', (_req: express.Request, res: express.Response) => {
+      try {
+        const result = globalMemoryMonitor.forceGCAndAnalyze();
+        res.json(result);
+      } catch (error) {
+        res.status(500).json({
+          error: error instanceof Error ? error.message : 'Unknown error',
+          timestamp: new Date().toISOString()
+        });
+      }
+    });
+
+    // Database cleanup analysis endpoint
+    app.get('/database/cleanup', async (_req: express.Request, res: express.Response) => {
+      try {
+        const [analysis, recommendations] = await Promise.all([
+          globalDatabaseCleanup.analyzeCleanupImpact(3),
+          globalDatabaseCleanup.getCleanupRecommendations()
+        ]);
+        
+        res.json({
+          analysis,
+          recommendations,
+          isCleanupRunning: globalDatabaseCleanup.isCleanupRunning()
+        });
+      } catch (error) {
+        res.status(500).json({
+          error: error instanceof Error ? error.message : 'Unknown error',
+          timestamp: new Date().toISOString()
+        });
+      }
+    });
+
+    // Database cleanup execution endpoint (POST for safety)
+    app.post('/database/cleanup', async (req: express.Request, res: express.Response) => {
+      try {
+        const { daysToKeep = 3, dryRun = true } = req.body || {};
+        
+        if (!dryRun && req.headers['x-confirm-cleanup'] !== 'true') {
+          res.status(400).json({
+            error: 'Live cleanup requires X-Confirm-Cleanup: true header'
+          });
+          return;
+        }
+
+        const result = await globalDatabaseCleanup.performCleanup(daysToKeep, dryRun);
+        res.json(result);
+      } catch (error) {
+        res.status(500).json({
+          error: error instanceof Error ? error.message : 'Unknown error',
+          timestamp: new Date().toISOString()
+        });
+      }
+    });
+
     // Register Helius webhook route
     try {
       registerHeliusWebhookRoutes(app);
@@ -328,12 +423,30 @@ class FollowCoinBot {
       logger.info(`Status endpoint: http://localhost:${port}/status`);
     });
 
-    // Self-monitoring: Check health every 5 minutes and alert if down
+    // Self-monitoring: Check health every 5 minutes and alert if down or memory high
     setInterval(async () => {
       try {
         const response = await fetch(`http://localhost:${port}/health`);
         if (!response.ok) {
           await this.sendHealthAlert('Bot health check failed', 'error');
+        } else {
+          const healthData = await response.json() as any;
+          
+          // Only alert on truly critical memory (95%+ of limit)
+          if (healthData.memory?.pressure === 'critical') {
+            await this.sendHealthAlert(
+              `Critical memory usage: ${healthData.memory.rss}MB (${healthData.memory.largestComponent} is largest component)`,
+              'critical'
+            );
+          }
+          
+          // Alert on confirmed memory leaks only (requires 2+ hours of data)
+          if (healthData.trends?.memoryLeakWarning && healthData.memory?.rss > 300) {
+            await this.sendHealthAlert(
+              `Confirmed memory leak: ${healthData.memory.rss}MB, growing at ${healthData.trends.rssGrowthRateMBPerHour}MB/hour`,
+              'error'
+            );
+          }
         }
       } catch (error) {
         await this.sendHealthAlert('Bot health check server unreachable', 'critical');
@@ -384,6 +497,7 @@ class FollowCoinBot {
 
       globalJobQueue.stop();
       globalHealthCheck.stop();
+      globalMemoryMonitor.stop();
       logger.info('Background services stopped');
 
       if (this.telegram) {

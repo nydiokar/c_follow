@@ -963,7 +963,27 @@ Track cryptocurrency movements with intelligent alerts:
     try {
       const hotEntries = await this.hotList.listEntries();
       const longEntries = await this.db.getLongListCoins();
-      const memory = process.memoryUsage();
+      
+      // Get enhanced memory stats from our monitoring
+      let memoryInfo = '';
+      try {
+        const response = await fetch('http://localhost:3002/health');
+        if (response.ok) {
+          const healthData = await response.json() as any;
+          const rss = healthData.memory?.rss || 0;
+          const pressure = healthData.memory?.pressure || 'unknown';
+          const pressureEmoji = pressure === 'critical' ? '🔴' : 
+                               pressure === 'high' ? '🟡' : 
+                               pressure === 'medium' ? '🟠' : '🟢';
+          memoryInfo = `💾 *Memory:* ${rss}MB ${pressureEmoji}\n`;
+        } else {
+          const memory = process.memoryUsage();
+          memoryInfo = `💾 *Memory:* ${Math.round(memory.rss / 1024 / 1024)}MB\n`;
+        }
+      } catch {
+        const memory = process.memoryUsage();
+        memoryInfo = `💾 *Memory:* ${Math.round(memory.rss / 1024 / 1024)}MB\n`;
+      }
       
       // Format uptime nicely
       const uptimeSeconds = Math.floor(process.uptime());
@@ -981,8 +1001,7 @@ Track cryptocurrency movements with intelligent alerts:
       
       let message = `📊 *Bot Status*\n\n`;
       message += `⏰ *Uptime:* ${uptimeStr}\n`;
-      message += `💾 *Memory:* ${Math.round(memory.heapUsed / 1024 / 1024)}MB used\n`;
-      message += `🤖 *Process:* ${process.pid}\n\n`;
+      message += memoryInfo;
       
       message += `🔥 *Hot List:* ${hotEntries.length} entries\n`;
       if (hotHealth && hotHealth.lastCheck > 0) {

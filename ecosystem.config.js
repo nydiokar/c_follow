@@ -6,7 +6,7 @@ module.exports = {
       instances: 1,
       exec_mode: 'fork',
       watch: false,
-      max_memory_restart: '500M',
+      max_memory_restart: '750M',
       node_args: '--max-old-space-size=512 --expose-gc',
       env: {
         NODE_ENV: 'production',
