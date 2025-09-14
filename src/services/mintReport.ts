@@ -45,6 +45,7 @@ async function processTokenChunk(
     noDataTokens: string[];
     deadTokens: string[];
     cleanTokens: string[];
+    allLegitimateMarketCaps: number[];
   }
 ): Promise<void> {
   for (const { tokenAddress, row } of chunk) {
@@ -96,6 +97,9 @@ async function processTokenChunk(
     const mcap = info.marketCap;
     const liquidity = info.liquidity;
     const volume24h = info.volume24h || 0;
+    
+    // This token is legitimate (not scam, has data) - collect its market cap for overview stats
+    counters.allLegitimateMarketCaps.push(mcap);
     
     // Apply filters: market cap range, liquidity > $12k, volume > $100k
     if (mcap < minCap) {
@@ -204,6 +208,7 @@ export async function runMintReport(
     const noDataTokens: string[] = [];
     const deadTokens: string[] = [];
     const cleanTokens: string[] = [];
+    const allLegitimateMarketCaps: number[] = []; // For overview stats
     
     // Process chunks sequentially
     for (let i = 0; i < requests.length; i += CHUNK_SIZE) {
@@ -226,7 +231,8 @@ export async function runMintReport(
         newScamTokens,
         noDataTokens,
         deadTokens,
-        cleanTokens
+        cleanTokens,
+        allLegitimateMarketCaps
       });
       
       // Force garbage collection after each chunk (if available)
@@ -294,6 +300,18 @@ export async function runMintReport(
     const tsLocal = new Date().toLocaleString('en-US', { timeZone: timezone, hour12: false });
     let msg = `🆕 Token Mints (last 24h) — ${tsLocal}\n`;
     msg += `📊 ${rows.length} total mints → ${items.length} within range $${minCap.toLocaleString()} - $${maxCap.toLocaleString()}\n\n`;
+    
+    // Add market cap overview stats for ALL legitimate tokens (excluding scams/no-data)
+    if (allLegitimateMarketCaps.length > 0) {
+      const sortedMcaps = [...allLegitimateMarketCaps].sort((a, b) => a - b);
+      const avg = sortedMcaps.reduce((sum, mc) => sum + mc, 0) / sortedMcaps.length;
+      const median = sortedMcaps[Math.floor(sortedMcaps.length * 0.5)] || 0;
+      const max = sortedMcaps[sortedMcaps.length - 1] || 0;
+      msg += `📈 Market Cap Overview (all ${allLegitimateMarketCaps.length} legitimate tokens):\n`;
+      msg += `   • Average: $${avg.toLocaleString(undefined, {maximumFractionDigits: 0})}\n`;
+      msg += `   • Median: $${median.toLocaleString(undefined, {maximumFractionDigits: 0})}\n`;
+      msg += `   • 🚀 Maximum: $${max.toLocaleString(undefined, {maximumFractionDigits: 0})}\n\n`;
+    }
 
     for (let i = 0; i < items.length; i++) {
       const it = items[i]!;

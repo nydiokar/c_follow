@@ -48,6 +48,7 @@ class FollowCoinBot {
   private config: AppConfig;
   private isShuttingDown = false;
   private wsIngest: WebSocketIngestService | null = null;
+  private alertStates = new Map<string, string>(); // Track alert states for state-based alerting
 
   constructor() {
     try {
@@ -432,19 +433,72 @@ class FollowCoinBot {
         } else {
           const healthData = await response.json() as any;
           
-          // Only alert on truly critical memory (95%+ of limit)
-          if (healthData.memory?.pressure === 'critical') {
-            await this.sendHealthAlert(
-              `Critical memory usage: ${healthData.memory.rss}MB (${healthData.memory.largestComponent} is largest component)`,
-              'critical'
+          // State-based memory pressure alerting
+          if (healthData.memory?.pressure) {
+            const memoryState = healthData.memory.pressure;
+            await this.handleStateBasedAlert(
+              'memory_pressure',
+              memoryState,
+              {
+                low: null, // No alert for low memory
+                medium: { level: 'warning', message: `Memory usage elevated: ${healthData.memory?.rss}MB (${memoryState})` },
+                high: { level: 'error', message: `High memory usage: ${healthData.memory?.rss}MB (${healthData.memory?.largestComponent} is largest component)` },
+                critical: { level: 'critical', message: `Critical memory usage: ${healthData.memory?.rss}MB (${healthData.memory?.largestComponent} is largest component)` }
+              }
             );
           }
           
-          // Alert on confirmed memory leaks only (requires 2+ hours of data)
-          if (healthData.trends?.memoryLeakWarning && healthData.memory?.rss > 300) {
-            await this.sendHealthAlert(
-              `Confirmed memory leak: ${healthData.memory.rss}MB, growing at ${healthData.trends.rssGrowthRateMBPerHour}MB/hour`,
-              'error'
+          // State-based memory leak alerting
+          const leakState = (healthData.trends?.memoryLeakWarning && healthData.memory?.rss > 300) ? 'detected' : 'ok';
+          await this.handleStateBasedAlert(
+            'memory_leak',
+            leakState,
+            {
+              ok: null,
+              detected: { 
+                level: 'error', 
+                message: `Memory leak detected: ${healthData.memory?.rss}MB, growing at ${healthData.trends?.rssGrowthRateMBPerHour || 0}MB/hour` 
+              }
+            }
+          );
+          
+          // State-based memory spike alerting
+          const spikeState = healthData.trends?.suddenSpike ? 'detected' : 'ok';
+          if (spikeState === 'detected' && !healthData.trends?.spikeDetails) {
+            // Spike detected but no details - still critical, use fallback message
+            await this.handleStateBasedAlert(
+              'memory_spike',
+              spikeState,
+              {
+                ok: null,
+                detected: { 
+                  level: 'error', 
+                  message: `Memory spike detected but details unavailable - check memory immediately`
+                }
+              }
+            );
+          } else if (spikeState === 'detected' && healthData.trends?.spikeDetails) {
+            const spike = healthData.trends.spikeDetails;
+            await this.handleStateBasedAlert(
+              'memory_spike',
+              spikeState,
+              {
+                ok: null,
+                detected: { 
+                  level: 'error', 
+                  message: `Memory spike detected: ${spike.fromMB}MB → ${spike.toMB}MB (+${spike.increaseMB}MB in ${spike.timeAgo})`
+                }
+              }
+            );
+          } else {
+            // No spike detected, handle normal state
+            await this.handleStateBasedAlert(
+              'memory_spike',
+              spikeState,
+              {
+                ok: null,
+                detected: { level: 'error', message: '' } // Won't be used since state is 'ok'
+              }
             );
           }
         }
@@ -452,6 +506,40 @@ class FollowCoinBot {
         await this.sendHealthAlert('Bot health check server unreachable', 'critical');
       }
     }, 300000); // Every 5 minutes
+  }
+
+  private async handleStateBasedAlert(
+    alertKey: string, 
+    currentState: string, 
+    stateConfig: Record<string, { level: 'warning' | 'error' | 'critical', message: string } | null>
+  ): Promise<void> {
+    const lastState = this.alertStates.get(alertKey);
+    
+    // Only alert if state changed
+    if (lastState === currentState) {
+      return;
+    }
+    
+    // Update state
+    this.alertStates.set(alertKey, currentState);
+    
+    // Get alert config for current and last states
+    const currentConfig = stateConfig[currentState];
+    const lastConfig = lastState ? stateConfig[lastState] : null;
+    
+    if (currentConfig) {
+      // Send alert for new problematic state
+      await this.sendHealthAlert(currentConfig.message, currentConfig.level);
+      logger.info(`State changed for ${alertKey}: ${lastState || 'unknown'} → ${currentState}`);
+    } else if (lastConfig && !currentConfig) {
+      // Send recovery alert only when moving from problem state to non-problem state
+      // Define recovery states that should trigger recovery alerts
+      const recoveryStates = ['ok', 'low'];
+      if (recoveryStates.includes(currentState)) {
+        await this.sendHealthAlert(`${alertKey.replace('_', ' ')} recovered: now ${currentState}`, 'warning');
+        logger.info(`State recovered for ${alertKey}: ${lastState} → ${currentState}`);
+      }
+    }
   }
 
   private async sendHealthAlert(message: string, level: 'warning' | 'error' | 'critical'): Promise<void> {

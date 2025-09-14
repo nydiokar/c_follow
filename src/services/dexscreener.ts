@@ -50,7 +50,22 @@ export class DexScreenerService {
       headers: {
         'Accept': 'application/json',
         'User-Agent': 'follow-coin-bot/1.0.0'
-      }
+      },
+      // Fix memory leak: Limit HTTP connections and enable cleanup
+      httpAgent: new (require('http').Agent)({ 
+        keepAlive: true, 
+        maxSockets: 10,
+        maxFreeSockets: 5,
+        timeout: 30000,
+        freeSocketTimeout: 15000 
+      }),
+      httpsAgent: new (require('https').Agent)({ 
+        keepAlive: true, 
+        maxSockets: 10,
+        maxFreeSockets: 5,
+        timeout: 30000,
+        freeSocketTimeout: 15000 
+      })
     });
 
     this.rateLimiter = new RateLimiter(300, 60000);

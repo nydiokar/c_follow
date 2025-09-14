@@ -56,9 +56,11 @@ export class DatabaseManager {
           logger.warn('Could not enable WAL mode, continuing with default:', error);
         }
         
-        await prisma.$executeRaw`PRAGMA synchronous=NORMAL`;
-        await prisma.$executeRaw`PRAGMA temp_store=MEMORY`;
-        await prisma.$executeRaw`PRAGMA cache_size=10000`;
+        await prisma.$queryRaw`PRAGMA synchronous=NORMAL`;
+        await prisma.$queryRaw`PRAGMA temp_store=MEMORY`;
+        await prisma.$queryRaw`PRAGMA cache_size=10000`;
+        await prisma.$queryRaw`PRAGMA mmap_size=268435456`; // 256MB mmap limit
+        await prisma.$queryRaw`PRAGMA soft_heap_limit=104857600`; // 100MB heap limit
 
         await this.ensureDefaultConfig();
         
@@ -126,6 +128,20 @@ export class DatabaseManager {
         latency: -1, 
         error: error instanceof Error ? error.message : 'Unknown error' 
       };
+    }
+  }
+
+  // MEMORY LEAK FIX: Force database connection cleanup
+  static async forceCleanup(): Promise<void> {
+    if (this.instance) {
+      try {
+        // Force SQLite to checkpoint WAL and free memory
+        await this.instance.$queryRaw`PRAGMA wal_checkpoint(TRUNCATE)`;
+        await this.instance.$queryRaw`PRAGMA shrink_memory`;
+        logger.info('Database memory cleanup completed');
+      } catch (error) {
+        logger.warn('Database cleanup failed:', error);
+      }
     }
   }
 }

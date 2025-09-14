@@ -11,6 +11,8 @@ export class WebSocketIngestService {
   private dispatcher: EventDispatcher | null = null;
   private fetcher: TransactionFetcher | null = null;
   private seen = new Set<string>();
+  private cleanupInterval: NodeJS.Timeout | null = null;
+  private readonly MAX_SEEN_SIZE = 10000; // Limit seen Set to 10k signatures
 
   start(): void {
     const apiKey = process.env.HELIUS_API_KEY;
@@ -42,11 +44,21 @@ export class WebSocketIngestService {
 
     this.conn.connect();
     this.registry.registerAll();
+    
+    // Set up cleanup interval to prevent memory leak
+    this.cleanupInterval = setInterval(() => {
+      this.cleanupSeenSignatures();
+    }, 10 * 60 * 1000); // Every 10 minutes
+    
     logger.info('WS ingest started', { programs, monitorSpl, monitor2022 });
   }
 
   stop(): void {
     this.conn?.close();
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+    }
   }
 
   private handleEvent(e: WsEvent): void {
@@ -67,6 +79,11 @@ export class WebSocketIngestService {
     // Deduplicate by signature
     if (this.seen.has(tx.signature)) return;
     this.seen.add(tx.signature);
+    
+    // Prevent unbounded growth - clean up if too large
+    if (this.seen.size > this.MAX_SEEN_SIZE) {
+      this.cleanupSeenSignatures();
+    }
 
     const prisma = DatabaseManager.getInstance() as any;
 
@@ -103,6 +120,36 @@ export class WebSocketIngestService {
       });
     } catch (e: any) {
       // ignore unique constraint errors
+    }
+  }
+
+  private cleanupSeenSignatures(): void {
+    const sizeBefore = this.seen.size;
+    
+    // If we're over the limit, keep only the most recent half
+    if (sizeBefore > this.MAX_SEEN_SIZE) {
+      const signaturesArray = Array.from(this.seen);
+      // Clear the set and re-add only the last half
+      // This is a simple LRU-like mechanism - not perfect but good enough
+      this.seen.clear();
+      const keepCount = Math.floor(this.MAX_SEEN_SIZE / 2);
+      const toKeep = signaturesArray.slice(-keepCount);
+      
+      for (const sig of toKeep) {
+        this.seen.add(sig);
+      }
+      
+      const sizeAfter = this.seen.size;
+      const freedCount = sizeBefore - sizeAfter;
+      
+      if (freedCount > 0) {
+        logger.info('WebSocket seen signatures cleanup', {
+          before: sizeBefore,
+          after: sizeAfter,
+          freedCount,
+          memoryFreedApproxKB: Math.round((freedCount * 88) / 1024) // ~88 bytes per signature
+        });
+      }
     }
   }
 }

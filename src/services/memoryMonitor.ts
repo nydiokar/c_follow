@@ -1,4 +1,5 @@
 import { logger } from '../utils/logger';
+import { DatabaseManager } from '../utils/database';
 
 interface MemorySnapshot {
   timestamp: number;
@@ -17,6 +18,13 @@ interface MemoryStats {
     externalGrowthRate: number;
     rssGrowthRate: number;
     memoryLeakWarning: boolean;
+    suddenSpike: boolean; // Detects sudden memory increases
+    spikeDetails: {
+      fromMB: number;
+      toMB: number;
+      increaseMB: number;
+      timeAgo: string;
+    } | null;
   };
   analysis: {
     largestComponent: string;
@@ -37,11 +45,15 @@ export class MemoryMonitor {
     if (this.intervalId) return;
     
     // Take initial snapshot
-    this.takeSnapshot();
+    this.takeSnapshot().catch(error => {
+      logger.error('Initial memory snapshot failed:', error);
+    });
     
     // Set up interval for regular snapshots
-    this.intervalId = setInterval(() => {
-      this.takeSnapshot();
+    this.intervalId = setInterval(async () => {
+      await this.takeSnapshot().catch(error => {
+        logger.error('Memory snapshot failed:', error);
+      });
     }, this.snapshotInterval);
     
     logger.info('Memory monitoring started - taking snapshots every 5 minutes');
@@ -55,7 +67,7 @@ export class MemoryMonitor {
     }
   }
 
-  private takeSnapshot(): void {
+  private async takeSnapshot(): Promise<void> {
     const usage = process.memoryUsage();
     const snapshot: MemorySnapshot = {
       timestamp: Date.now(),
@@ -73,6 +85,37 @@ export class MemoryMonitor {
       this.history = this.history.slice(-this.maxHistorySize);
     }
 
+    // MEMORY LEAK FIX: Force GC when external memory dominates
+    // But only during low-activity windows to avoid API conflicts
+    if (snapshot.external > 200 || snapshot.rss > 250) {
+      if (global.gc && this.isLowActivityWindow()) {
+        const beforeGC = process.memoryUsage();
+        global.gc();
+        
+        // Also trigger database cleanup every 4th snapshot when memory is high
+        if (this.history.length % 4 === 0) {
+          await DatabaseManager.forceCleanup();
+        }
+        
+        const afterGC = process.memoryUsage();
+        const freedMB = Math.round((beforeGC.rss - afterGC.rss) / 1024 / 1024);
+        
+        if (freedMB > 5) {
+          logger.info('Forced GC freed memory during low activity', {
+            beforeMB: Math.round(beforeGC.rss / 1024 / 1024),
+            afterMB: Math.round(afterGC.rss / 1024 / 1024),
+            freedMB
+          });
+        }
+      } else if (snapshot.rss > 400) {
+        // Emergency GC if memory is critically high (>400MB), regardless of activity
+        if (global.gc) {
+          logger.warn('Emergency GC triggered due to critical memory usage', { rss: snapshot.rss });
+          global.gc();
+        }
+      }
+    }
+
     // Log critical memory events
     if (snapshot.rss > this.memoryLimitMB * 0.9) {
       logger.warn('Memory usage approaching limit', {
@@ -86,7 +129,9 @@ export class MemoryMonitor {
 
   getStats(): MemoryStats {
     if (this.history.length === 0) {
-      this.takeSnapshot();
+      this.takeSnapshot().catch(error => {
+        logger.error('Stats snapshot failed:', error);
+      });
     }
 
     const current = this.history[this.history.length - 1]!;
@@ -107,7 +152,9 @@ export class MemoryMonitor {
         heapGrowthRate: 0,
         externalGrowthRate: 0,
         rssGrowthRate: 0,
-        memoryLeakWarning: false
+        memoryLeakWarning: false,
+        suddenSpike: false,
+        spikeDetails: null
       };
     }
 
@@ -118,7 +165,9 @@ export class MemoryMonitor {
         heapGrowthRate: 0,
         externalGrowthRate: 0,
         rssGrowthRate: 0,
-        memoryLeakWarning: false
+        memoryLeakWarning: false,
+        suddenSpike: false,
+        spikeDetails: null
       };
     }
 
@@ -129,7 +178,9 @@ export class MemoryMonitor {
         heapGrowthRate: 0,
         externalGrowthRate: 0,
         rssGrowthRate: 0,
-        memoryLeakWarning: false
+        memoryLeakWarning: false,
+        suddenSpike: false,
+        spikeDetails: null
       };
     }
 
@@ -142,7 +193,9 @@ export class MemoryMonitor {
         heapGrowthRate: 0,
         externalGrowthRate: 0,
         rssGrowthRate: 0,
-        memoryLeakWarning: false
+        memoryLeakWarning: false,
+        suddenSpike: false,
+        spikeDetails: null
       };
     }
 
@@ -156,11 +209,16 @@ export class MemoryMonitor {
     // - Exclude growth during first hour after restart
     const memoryLeakWarning = hoursDiff >= 2 && rssGrowthRate > 15 && heapGrowthRate > 5;
 
+    // Detect sudden memory spikes (>100MB increase within 30 minutes)
+    const { suddenSpike, spikeDetails } = this.detectMemorySpike();
+
     return {
       heapGrowthRate: Math.round(heapGrowthRate * 100) / 100,
       externalGrowthRate: Math.round(externalGrowthRate * 100) / 100,
       rssGrowthRate: Math.round(rssGrowthRate * 100) / 100,
-      memoryLeakWarning
+      memoryLeakWarning,
+      suddenSpike,
+      spikeDetails
     };
   }
 
@@ -198,7 +256,11 @@ export class MemoryMonitor {
 
   // Get memory breakdown for webhook/WS analysis
   getMemoryBreakdown() {
-    if (this.history.length === 0) this.takeSnapshot();
+    if (this.history.length === 0) {
+      this.takeSnapshot().catch(error => {
+        logger.error('Breakdown snapshot failed:', error);
+      });
+    }
     const current = this.history[this.history.length - 1]!;
     
     // Get additional system info for analysis
@@ -306,6 +368,86 @@ export class MemoryMonitor {
     }
     
     return recommendations;
+  }
+
+  // Detect low-activity windows to safely run GC
+  private isLowActivityWindow(): boolean {
+    const now = Date.now();
+    const currentSeconds = Math.floor((now / 1000) % 60); // Seconds within 1-minute cycle
+    
+    // Hot list checks run every 1 minute (60 seconds)
+    // Avoid GC during seconds 0-10 of each minute (when hot checks run)
+    // This gives 50 seconds of safe window per minute
+    const isHotCheckWindow = currentSeconds <= 10;
+    
+    // Also avoid first few minutes of each hour when hourly tasks run
+    const currentMinute = Math.floor((now / (1000 * 60)) % 60);
+    const isHourlyTaskWindow = currentMinute <= 2;
+    
+    // And avoid webhook processing bursts (tokens come in constantly but in waves)
+    // Skip GC if we're in the first 20 seconds of each minute (peak activity)
+    const isPeakActivity = currentSeconds <= 20;
+    
+    return !isHotCheckWindow && !isHourlyTaskWindow && !isPeakActivity;
+  }
+
+  // Detect sudden memory spikes (>100MB increase within 30 minutes)
+  private detectMemorySpike(): { suddenSpike: boolean; spikeDetails: { fromMB: number; toMB: number; increaseMB: number; timeAgo: string; } | null } {
+    if (this.history.length < 12) { // Need at least 1 hour of data
+      return { suddenSpike: false, spikeDetails: null };
+    }
+
+    const current = this.history[this.history.length - 1]!;
+    const thirtyMinAgo = current.timestamp - (30 * 60 * 1000);
+    
+    // Find the closest sample to 30 minutes ago
+    let baselineSnapshot = this.history[this.history.length - 7]; // ~30 min ago (6 samples = 30 min)
+    if (!baselineSnapshot) {
+      baselineSnapshot = this.history[0]; // Use oldest available if less than 30 min of data
+    }
+    
+    if (!baselineSnapshot) {
+      return { suddenSpike: false, spikeDetails: null }; // Not enough data
+    }
+    
+    const memoryIncrease = current.rss - baselineSnapshot.rss;
+    const timeAgoMinutes = Math.round((current.timestamp - baselineSnapshot.timestamp) / (60 * 1000));
+    
+    // Consider it a spike if memory increased by >100MB in the timeframe
+    // OR increased by >150MB from any point in the last 2 hours
+    const isSpike = memoryIncrease > 100;
+    
+    // Check for larger spikes in the last 2 hours
+    const twoHoursAgo = current.timestamp - (2 * 60 * 60 * 1000);
+    let largestIncrease = memoryIncrease;
+    let spikeBaselineSnapshot = baselineSnapshot;
+    
+    for (const snapshot of this.history) {
+      if (snapshot.timestamp >= twoHoursAgo && snapshot.timestamp < current.timestamp) {
+        const increase = current.rss - snapshot.rss;
+        if (increase > largestIncrease) {
+          largestIncrease = increase;
+          spikeBaselineSnapshot = snapshot;
+        }
+      }
+    }
+    
+    const isSuddenSpike = largestIncrease > 150 || isSpike;
+    
+    if (isSuddenSpike && spikeBaselineSnapshot) {
+      const timeSinceSpike = Math.round((current.timestamp - spikeBaselineSnapshot.timestamp) / (60 * 1000));
+      return {
+        suddenSpike: true,
+        spikeDetails: {
+          fromMB: spikeBaselineSnapshot.rss,
+          toMB: current.rss,
+          increaseMB: largestIncrease,
+          timeAgo: timeSinceSpike < 60 ? `${timeSinceSpike}m` : `${Math.round(timeSinceSpike / 60)}h`
+        }
+      };
+    }
+    
+    return { suddenSpike: false, spikeDetails: null };
   }
 
   // Force garbage collection and return memory stats (for debugging)
