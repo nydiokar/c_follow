@@ -85,44 +85,14 @@ export class MemoryMonitor {
       this.history = this.history.slice(-this.maxHistorySize);
     }
 
-    // MEMORY LEAK FIX: Force GC when external memory dominates
-    // But only during low-activity windows to avoid API conflicts
-    if (snapshot.external > 200 || snapshot.rss > 250) {
-      if (global.gc && this.isLowActivityWindow()) {
-        const beforeGC = process.memoryUsage();
-        global.gc();
-        
-        // Also trigger database cleanup every 4th snapshot when memory is high
-        if (this.history.length % 4 === 0) {
-          await DatabaseManager.forceCleanup();
-        }
-        
-        const afterGC = process.memoryUsage();
-        const freedMB = Math.round((beforeGC.rss - afterGC.rss) / 1024 / 1024);
-        
-        if (freedMB > 5) {
-          logger.info('Forced GC freed memory during low activity', {
-            beforeMB: Math.round(beforeGC.rss / 1024 / 1024),
-            afterMB: Math.round(afterGC.rss / 1024 / 1024),
-            freedMB
-          });
-        }
-      } else if (snapshot.rss > 400) {
-        // Emergency GC if memory is critically high (>400MB), regardless of activity
-        if (global.gc) {
-          logger.warn('Emergency GC triggered due to critical memory usage', { rss: snapshot.rss });
-          global.gc();
-        }
-      }
-    }
-
-    // Log critical memory events
+    // Monitor memory without forced GC - let's observe natural patterns
     if (snapshot.rss > this.memoryLimitMB * 0.9) {
       logger.warn('Memory usage approaching limit', {
         rss: snapshot.rss,
         limit: this.memoryLimitMB,
         external: snapshot.external,
-        heap: snapshot.heapUsed
+        heap: snapshot.heapUsed,
+        other: snapshot.rss - snapshot.heapUsed - snapshot.external
       });
     }
   }

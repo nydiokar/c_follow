@@ -59,7 +59,7 @@ export class DatabaseManager {
         await prisma.$queryRaw`PRAGMA synchronous=NORMAL`;
         await prisma.$queryRaw`PRAGMA temp_store=MEMORY`;
         await prisma.$queryRaw`PRAGMA cache_size=10000`;
-        await prisma.$queryRaw`PRAGMA mmap_size=268435456`; // 256MB mmap limit
+        await prisma.$queryRaw`PRAGMA mmap_size=52428800`; // 50MB mmap limit (reduce memory usage)
         await prisma.$queryRaw`PRAGMA soft_heap_limit=104857600`; // 100MB heap limit
 
         await this.ensureDefaultConfig();

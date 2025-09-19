@@ -127,7 +127,7 @@ export function registerHeliusWebhookRoutes(app: express.Express): void {
       logger.debug('Webhook request', { bodyLength: JSON.stringify(req.body).length });
       
       if (!headerSecretOk(req)) {
-        logger.warn('WEBHOOK AUTH FAILED', { headers: req.headers });
+        logger.debug('WEBHOOK AUTH FAILED'); // Reduced log spam
         return res.status(401).json({ ok: false, error: 'unauthorized' });
       }
 

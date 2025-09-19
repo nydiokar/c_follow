@@ -366,8 +366,13 @@ class FollowCoinBot {
       }
     });
 
-    // Database cleanup analysis endpoint
-    app.get('/database/cleanup', async (_req: express.Request, res: express.Response) => {
+    // Database cleanup analysis endpoint (ADMIN ONLY)
+    app.get('/database/cleanup', async (req: express.Request, res: express.Response) => {
+      // SECURITY: Require admin authentication
+      if (req.headers['x-admin-key'] !== process.env.ADMIN_SECRET_KEY) {
+        res.status(401).json({ error: 'Admin authentication required' });
+        return;
+      }
       try {
         const [analysis, recommendations] = await Promise.all([
           globalDatabaseCleanup.analyzeCleanupImpact(3),
@@ -387,8 +392,14 @@ class FollowCoinBot {
       }
     });
 
-    // Database cleanup execution endpoint (POST for safety)
+    // Database cleanup execution endpoint (ADMIN ONLY - DANGEROUS!)
     app.post('/database/cleanup', async (req: express.Request, res: express.Response) => {
+      // SECURITY: Require admin authentication
+      if (req.headers['x-admin-key'] !== process.env.ADMIN_SECRET_KEY) {
+        res.status(401).json({ error: 'Admin authentication required' });
+        return;
+      }
+      
       try {
         const { daysToKeep = 3, dryRun = true } = req.body || {};
         

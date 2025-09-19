@@ -11,7 +11,7 @@ class DatabaseBackup {
   constructor() {
     this.backupDir = path.join(process.cwd(), 'backups');
     this.databasePath = process.env.DATABASE_URL?.replace('file:', '') || './data/bot.db';
-    this.maxBackups = parseInt(process.env.MAX_BACKUPS || '30'); // Keep 30 days of backups
+    this.maxBackups = parseInt(process.env.MAX_BACKUPS || '2'); // Keep 2 days of backups
     this.compressionLevel = process.env.COMPRESSION_LEVEL || '6'; // 0-9, higher = more compression
   }
 
