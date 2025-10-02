@@ -6,7 +6,6 @@
       "Bash(cp:*)",
       "Bash(dir:*)",
       "Bash(mkdir:*)",
-      "Bash(rm:*)",
       "Bash(npx tsc:*)",
       "Bash(npm run build:*)",
       "Bash(npx prisma generate:*)",
@@ -16,7 +15,9 @@
       "Bash(grep:*)"
     ],
     "deny": [
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(rmdir:*)",
+      "Bash(rmdir:*)"
     ]
   }
 }
