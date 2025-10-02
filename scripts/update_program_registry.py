@@ -17,7 +17,7 @@ import requests
 # Paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
-REGISTRY_PATH = os.path.join(PROJECT_DIR, 'src/data/solana_program_registry.json')
+REGISTRY_PATH = os.path.join(PROJECT_DIR, 'src/solana_program_registry.json')
 DB_PATH = os.path.join(PROJECT_DIR, 'prisma/bot.db')
 ENV_PATH = os.path.join(PROJECT_DIR, '.env')
 

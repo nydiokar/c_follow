@@ -1,7 +1,7 @@
 #!/bin/bash
 # Helper script to review pending programs
 
-REGISTRY="src/data/solana_program_registry.json"
+REGISTRY="src/solana_program_registry.json"
 
 echo "================================================"
 echo "  Program Registry Review Helper"

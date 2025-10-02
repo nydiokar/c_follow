@@ -18,7 +18,7 @@ python3 scripts/update_program_registry.py
 
 **Automated (Weekly - Monday 9 AM):**
 1. Extracts all program IDs from database
-2. Updates `src/data/solana_program_registry.json`
+2. Updates `src/solana_program_registry.json`
 3. Sends Telegram notification with top 20 programs + Solscan links
 
 **Manual Review:**
@@ -76,7 +76,7 @@ When you identify a program, edit `src/data/program_registry.json`:
 
 ## Files
 
-- **`src/data/solana_program_registry.json`** - The registry (80 programs, 74 pending)
+- **`src/solana_program_registry.json`** - The registry (80 programs, 74 pending)
 - **`scripts/update_program_registry.py`** - Auto-update script (fast Python version)
 - **`scripts/review_programs.sh`** - Review helper
 
@@ -91,7 +91,7 @@ Run `./scripts/review_programs.sh` to see top 10 pending programs.
 ## Usage in Code
 
 ```typescript
-import registry from './src/data/solana_program_registry.json';
+import registry from './src/solana_program_registry.json';
 
 function shouldFilterProgram(programId: string): boolean {
   const program = registry.programs[programId];
@@ -106,7 +106,7 @@ function shouldFilterProgram(programId: string): boolean {
 
 After pushing to GitHub, share via:
 ```
-https://raw.githubusercontent.com/nydiokar/c_follow/main/src/data/solana_program_registry.json
+https://raw.githubusercontent.com/nydiokar/c_follow/main/src/solana_program_registry.json
 ```
 
 ## Cron Setup
