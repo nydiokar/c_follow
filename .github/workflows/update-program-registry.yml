@@ -1,0 +1,82 @@
+name: Update Program Registry
+
+on:
+  schedule:
+    # Run every Monday at 9 AM UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  update-registry:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Update program registry
+        id: update
+        run: |
+          npx ts-node scripts/update_program_registry.ts
+        continue-on-error: true
+
+      - name: Check for changes
+        id: check
+        run: |
+          if git diff --quiet src/data/program_registry.json; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            NEW_COUNT=$(cat src/data/program_registry.json | jq '.pending_review | length')
+            echo "new_count=$NEW_COUNT" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Pull Request
+        if: steps.check.outputs.has_changes == 'true'
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: update program registry with new programs"
+          branch: update-program-registry
+          delete-branch: true
+          title: "🔍 New Programs Detected - Review Required"
+          body: |
+            ## Program Registry Update
+
+            **New programs detected:** ${{ steps.check.outputs.new_count }}
+
+            ### Action Required
+            Please review the new programs in `src/data/program_registry.json` under `pending_review`.
+
+            For each program:
+            1. Visit the Solscan URL
+            2. Determine the category (system/dex_amm/token_launchpad/nft/unknown)
+            3. Move from `pending_review` to `programs` with proper classification
+
+            ### Review Template
+            ```json
+            "PROGRAM_ID_HERE": {
+              "name": "Program Name",
+              "category": "token_launchpad|dex_amm|system|nft|unknown",
+              "verified": "manual",
+              "verified_date": "YYYY-MM-DD",
+              "notes": "Optional notes"
+            }
+            ```
+
+            After reviewing, merge this PR to update the registry.
+          labels: |
+            program-registry
+            review-required
+
+      - name: Notify if no changes
+        if: steps.check.outputs.has_changes == 'false'
+        run: echo "✅ No new programs detected - registry is up to date"
