@@ -109,7 +109,7 @@ export class DatabaseCleanupService {
 
       // Perform actual deletion in small batches to minimize lock time
       let totalDeleted = 0;
-      const batchSize = 1000; // Smaller batches for concurrent safety
+      const batchSize = 10000; // Larger batches for faster cleanup
       
       // Get batch of IDs to delete (more efficient than timestamp filtering)
       const idsToDelete = await prisma.mintEvent.findMany({
@@ -138,9 +138,9 @@ export class DatabaseCleanupService {
         
         totalDeleted += batchResult.count;
         logger.info(`Deleted batch ${Math.ceil((i + 1) / batchSize)}: ${batchResult.count} records (total: ${totalDeleted})`);
-        
-        // Longer delay between batches for webhook safety
-        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Shorter delay between batches - 100ms is enough
+        await new Promise(resolve => setTimeout(resolve, 100));
       }
 
       // Vacuum to reclaim space

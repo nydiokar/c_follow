@@ -275,8 +275,9 @@ class FollowCoinBot {
 
   private startHealthCheck(): void {
     const app = express();
+    app.use(express.json());
     const port = parseInt(process.env.HEALTH_CHECK_PORT || '3002');
-    
+
     // Health check endpoint - lightweight, no database queries
     app.get('/health', (req: express.Request, res: express.Response) => {
       try {
@@ -447,15 +448,22 @@ class FollowCoinBot {
           // State-based memory pressure alerting
           if (healthData.memory?.pressure) {
             const memoryState = healthData.memory.pressure;
+            
+            // Log medium memory usage without alerting
+            if (memoryState === 'medium') {
+              logger.info(`Memory usage elevated: ${healthData.memory?.rss}MB (${memoryState})`);
+            }
+            
             await this.handleStateBasedAlert(
               'memory_pressure',
               memoryState,
               {
                 low: null, // No alert for low memory
-                medium: { level: 'warning', message: `Memory usage elevated: ${healthData.memory?.rss}MB (${memoryState})` },
-                high: { level: 'error', message: `High memory usage: ${healthData.memory?.rss}MB (${healthData.memory?.largestComponent} is largest component)` },
-                critical: { level: 'critical', message: `Critical memory usage: ${healthData.memory?.rss}MB (${healthData.memory?.largestComponent} is largest component)` }
-              }
+                medium: null, // No alert for medium memory, just log it
+                high: { level: 'error', message: `🔥 Memory usage high: ${healthData.memory?.rss}MB • ${healthData.memory?.largestComponent} using most memory` },
+                critical: { level: 'critical', message: `🚨 CRITICAL memory usage: ${healthData.memory?.rss}MB • ${healthData.memory?.largestComponent} using most memory` }
+              },
+              healthData.memory?.rss
             );
           }
           
@@ -468,9 +476,10 @@ class FollowCoinBot {
               ok: null,
               detected: { 
                 level: 'error', 
-                message: `Memory leak detected: ${healthData.memory?.rss}MB, growing at ${healthData.trends?.rssGrowthRateMBPerHour || 0}MB/hour` 
+                message: `🩸 Memory leak detected: ${healthData.memory?.rss}MB • Growing ${healthData.trends?.rssGrowthRateMBPerHour || 0}MB/hour` 
               }
-            }
+            },
+            healthData.memory?.rss
           );
           
           // State-based memory spike alerting
@@ -484,9 +493,10 @@ class FollowCoinBot {
                 ok: null,
                 detected: { 
                   level: 'error', 
-                  message: `Memory spike detected but details unavailable - check memory immediately`
+                  message: `⚡ Memory spike detected • Check memory immediately (details unavailable)`
                 }
-              }
+              },
+              healthData.memory?.rss
             );
           } else if (spikeState === 'detected' && healthData.trends?.spikeDetails) {
             const spike = healthData.trends.spikeDetails;
@@ -497,9 +507,10 @@ class FollowCoinBot {
                 ok: null,
                 detected: { 
                   level: 'error', 
-                  message: `Memory spike detected: ${spike.fromMB}MB → ${spike.toMB}MB (+${spike.increaseMB}MB in ${spike.timeAgo})`
+                  message: `⚡ Memory spike: ${spike.fromMB}MB → ${spike.toMB}MB • +${spike.increaseMB}MB in ${spike.timeAgo}`
                 }
-              }
+              },
+              healthData.memory?.rss
             );
           } else {
             // No spike detected, handle normal state
@@ -509,7 +520,8 @@ class FollowCoinBot {
               {
                 ok: null,
                 detected: { level: 'error', message: '' } // Won't be used since state is 'ok'
-              }
+              },
+              healthData.memory?.rss
             );
           }
         }
@@ -522,7 +534,8 @@ class FollowCoinBot {
   private async handleStateBasedAlert(
     alertKey: string, 
     currentState: string, 
-    stateConfig: Record<string, { level: 'warning' | 'error' | 'critical', message: string } | null>
+    stateConfig: Record<string, { level: 'warning' | 'error' | 'critical', message: string } | null>,
+    memoryUsageMB?: number
   ): Promise<void> {
     const lastState = this.alertStates.get(alertKey);
     
@@ -546,21 +559,39 @@ class FollowCoinBot {
       // Send recovery alert only when moving from problem state to non-problem state
       // Define recovery states that should trigger recovery alerts
       const recoveryStates = ['ok', 'low'];
+      
+      // For memory pressure alerts, only send recovery alert if recovering from high memory usage (400MB+)
       if (recoveryStates.includes(currentState)) {
-        await this.sendHealthAlert(`${alertKey.replace('_', ' ')} recovered: now ${currentState}`, 'warning');
-        logger.info(`State recovered for ${alertKey}: ${lastState} → ${currentState}`);
+        if (alertKey === 'memory_pressure') {
+          // Only send recovery alert if recovering from high memory usage (400MB+) and from 'high' or 'critical' states
+          const wasHighMemoryUsage = lastState && ['high', 'critical'].includes(lastState);
+          const hadHighMemoryUsage = memoryUsageMB && memoryUsageMB >= 400;
+          
+          if (wasHighMemoryUsage && hadHighMemoryUsage) {
+            await this.sendHealthAlert(`✅ Memory usage back to normal: ${currentState} (${memoryUsageMB}MB) - All good!`, 'warning');
+            logger.info(`Memory pressure recovered from high usage: ${lastState} → ${currentState} (${memoryUsageMB}MB)`);
+          } else {
+            // Still log the recovery but don't alert
+            logger.info(`Memory pressure state changed: ${lastState} → ${currentState} (${memoryUsageMB}MB) - no alert sent (not high memory recovery)`);
+          }
+        } else {
+          // For non-memory alerts, use the original logic
+          await this.sendHealthAlert(`${alertKey.replace('_', ' ')} recovered: now ${currentState}`, 'warning');
+          logger.info(`State recovered for ${alertKey}: ${lastState} → ${currentState}`);
+        }
       }
     }
   }
 
   private async sendHealthAlert(message: string, level: 'warning' | 'error' | 'critical'): Promise<void> {
     try {
-      const alertMessage = `🚨 **Bot Health Alert**\n\n` +
-        `**Level**: ${level.toUpperCase()}\n` +
-        `**Message**: ${message}\n` +
-        `**Time**: ${new Date().toISOString()}\n` +
-        `**Uptime**: ${Math.floor(process.uptime() / 60)} minutes\n` +
-        `**PID**: ${process.pid}`;
+      const levelEmoji = level === 'critical' ? '🚨' : level === 'error' ? '⚠️' : '💡';
+      const alertMessage = `${levelEmoji} Bot Health Alert\n\n` +
+        `📊 Level: ${level.toUpperCase()}\n` +
+        `💬 ${message}\n` +
+        `⏰ ${new Date().toLocaleTimeString()}\n` +
+        `⏳ Uptime: ${Math.floor(process.uptime() / 60)}min\n` +
+        `🔧 PID: ${process.pid}`;
 
       await this.telegram.sendMessage(this.config.telegramChatId, alertMessage);
       logger.warn(`Health alert sent to admin chat: ${message}`);

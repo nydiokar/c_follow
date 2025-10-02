@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(.env)",
+      "Write(.env)",
+      "Edit(.env)",
+      "Read(.env.*)",
+      "Write(.env.*)",
+      "Edit(.env.*)",
+      "Read(**/.env)",
+      "Write(**/.env)",
+      "Edit(**/.env)",
+      "Read(**/.env.*)",
+      "Write(**/.env.*)",
+      "Edit(**/.env.*)",
+      "Read(*.key)",
+      "Write(*.key)",
+      "Edit(*.key)",
+      "Read(*.pem)",
+      "Write(*.pem)",
+      "Edit(*.pem)",
+      "Read(**/secrets/*)",
+      "Write(**/secrets/*)",
+      "Edit(**/secrets/*)"
+    ]
+  }
+}
