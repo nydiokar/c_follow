@@ -13,6 +13,7 @@ CHECK_INTERVAL="${CHECK_INTERVAL:-60}"   # 1 minute - faster detection
 MAX_FAILURES="${MAX_FAILURES:-2}"       # Alert after 2 consecutive failures
 LOG_FILE="$PROJECT_ROOT/logs/monitor.log"
 ALERT_LOG="$PROJECT_ROOT/logs/monitor-alerts.log"
+PID_FILE="$PROJECT_ROOT/logs/monitor.pid"
 
 # Colors for output
 RED='\033[0;31m'
@@ -136,13 +137,37 @@ restart_bot() {
     fi
 }
 
+# Check if monitor is already running
+check_if_running() {
+    if [ -f "$PID_FILE" ]; then
+        local pid=$(cat "$PID_FILE")
+        if ps -p "$pid" > /dev/null 2>&1; then
+            return 0  # Already running
+        else
+            # Stale PID file
+            rm -f "$PID_FILE"
+            return 1
+        fi
+    fi
+    return 1
+}
+
 # Main monitoring loop
 main() {
-    log "Bot monitoring started"
+    # Check if already running
+    if check_if_running; then
+        error "Monitor is already running (PID: $(cat $PID_FILE))"
+        exit 1
+    fi
+
+    # Write PID file
+    echo $$ > "$PID_FILE"
+
+    log "Bot monitoring started (PID: $$)"
     log "Health check port: $HEALTH_CHECK_PORT"
     log "Check interval: ${CHECK_INTERVAL}s"
     log "Max failures before alert: $MAX_FAILURES"
-    
+
     local consecutive_failures=0
     local last_alert_time=0
     local alert_cooldown=300   # 5 minutes between duplicate alerts (reduced from 30 mins)
@@ -226,7 +251,8 @@ main() {
 
 # Handle script termination
 cleanup() {
-    log "Bot monitoring stopped"
+    log "Bot monitoring stopped (PID: $$)"
+    rm -f "$PID_FILE"
     exit 0
 }
 
@@ -289,8 +315,19 @@ case "${1:-start}" in
         main
         ;;
     "stop")
-        pkill -f "monitor.sh"
-        log "Monitoring stopped"
+        if [ -f "$PID_FILE" ]; then
+            local pid=$(cat "$PID_FILE")
+            if ps -p "$pid" > /dev/null 2>&1; then
+                kill "$pid"
+                rm -f "$PID_FILE"
+                log "Monitoring stopped (PID: $pid)"
+            else
+                warn "Monitor not running, removing stale PID file"
+                rm -f "$PID_FILE"
+            fi
+        else
+            warn "Monitor not running (no PID file found)"
+        fi
         ;;
     "status")
         if check_bot_health; then

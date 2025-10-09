@@ -6,8 +6,8 @@ module.exports = {
       instances: 1,
       exec_mode: 'fork',
       watch: false,
-      max_memory_restart: '750M',
-      node_args: '--max-old-space-size=512 --expose-gc',
+      max_memory_restart: '1200M',  // Increased for VACUUM operation safety
+      node_args: '--max-old-space-size=1024 --expose-gc',  // Match memory limit
       env: {
         NODE_ENV: 'production',
         LOG_LEVEL: 'info'
@@ -25,7 +25,8 @@ module.exports = {
       restart_delay: 5000,
       max_restarts: 10,
       min_uptime: '10s',
-      kill_timeout: 5000,
+      kill_timeout: 30000,  // Increased to 30s to allow VACUUM to finish gracefully
+      exp_backoff_restart_delay: 100,  // Exponential backoff for restart attempts
       wait_ready: true,
       listen_timeout: 10000,
       // Health check configuration

@@ -226,7 +226,10 @@ class FollowCoinBot {
       
       // Start memory monitoring
       globalMemoryMonitor.start();
-      
+
+      // Start database cleanup scheduler (runs daily at 7:41 AM)
+      globalDatabaseCleanup.startScheduledCleanup(2); // Keep clean tokens for 2 days, dead tokens for 1 day
+
       await withErrorHandling(
         () => this.scheduler.start(),
         createErrorContext('scheduler_start')
@@ -400,10 +403,10 @@ class FollowCoinBot {
         res.status(401).json({ error: 'Admin authentication required' });
         return;
       }
-      
+
       try {
-        const { daysToKeep = 3, dryRun = true } = req.body || {};
-        
+        const { daysToKeep = 3, dryRun = true, aggressive = false, deadTokenDays = 1 } = req.body || {};
+
         if (!dryRun && req.headers['x-confirm-cleanup'] !== 'true') {
           res.status(400).json({
             error: 'Live cleanup requires X-Confirm-Cleanup: true header'
@@ -411,7 +414,7 @@ class FollowCoinBot {
           return;
         }
 
-        const result = await globalDatabaseCleanup.performCleanup(daysToKeep, dryRun);
+        const result = await globalDatabaseCleanup.performCleanup(daysToKeep, dryRun, aggressive, deadTokenDays);
         res.json(result);
       } catch (error) {
         res.status(500).json({
