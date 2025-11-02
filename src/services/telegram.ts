@@ -60,6 +60,7 @@ export class TelegramService implements MessageSender {
     this.bot.command('alerts', this.handleAlertsCommand.bind(this));
     this.bot.command('status', this.handleStatusCommand.bind(this));
     this.bot.command('mints_24h', this.handleMints24hCommand.bind(this));
+    this.bot.command('list_contracts', this.handleListContractsCommand.bind(this));
   }
 
   private registerEventHandlers(): void {
@@ -172,6 +173,10 @@ export class TelegramService implements MessageSender {
     } catch (error) {
       await this.sendMessage(chatId, `❌ Failed to generate mint report: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
+  }
+
+  private async handleListContractsCommand(ctx: Context<Update>): Promise<void> {
+    await this.handleListContracts(ctx.message as Message);
   }
 
   private async sendPaginatedMessage(chatId: string, text: string, parseMode?: 'MarkdownV2' | 'HTML') {
@@ -587,44 +592,59 @@ Track cryptocurrency movements with intelligent alerts:
       
       let report = `📊 *Long List Snapshot* (${timestamp})\n`;
       report += `SOL: $${solPrice.toFixed(2)} (${solChangeStr}%)\n\n`;
+      report += `\`Ticker   Price (24h Δ%)     │72h High│ Vol  │vs SOL\`\n`;
+      report += `\`─────────────────────────────────────────────────────\`\n`;
 
-      // Split into multiple messages if too long (max ~15 coins per message)
-      const coinsPerMessage = 15;
-      for (let i = 0; i < reportData.length; i += coinsPerMessage) {
-        const batch = reportData.slice(i, i + coinsPerMessage);
-        let batchReport = i === 0 ? report : `📊 *Long List* (continued)\n\n`;
+      for (const coin of reportData) {
+        const price = coin.price < 1 ? coin.price.toFixed(6) : coin.price.toFixed(4);
+        const change24h = coin.change24h >= 0 ? `+${coin.change24h.toFixed(1)}` : coin.change24h.toFixed(1);
+        const priceWithDelta = `${price} (${change24h}%)`;
 
-        for (const coin of batch) {
-          const price = coin.price < 1 ? coin.price.toFixed(6) : coin.price.toFixed(4);
-          const change24h = coin.change24h >= 0 ? `+${coin.change24h.toFixed(1)}` : coin.change24h.toFixed(1);
-          const priceWithDelta = `${price} (${change24h}%)`;
+        // Fix the 72h high sign - negative retracement should show as negative
+        const retrace = coin.retraceFrom72hHigh >= 0 ? `+${coin.retraceFrom72hHigh.toFixed(1)}` : coin.retraceFrom72hHigh.toFixed(1);
 
-          // Fix the 72h high sign - negative retracement should show as negative
-          const retrace = coin.retraceFrom72hHigh >= 0 ? `+${coin.retraceFrom72hHigh.toFixed(1)}` : coin.retraceFrom72hHigh.toFixed(1);
+        const volume = Formatters.formatVolume(coin.volume24h);
 
-          const volume = Formatters.formatVolume(coin.volume24h);
+        // Format vs SOL performance
+        const solDiff = coin.solPerformanceDiff || 0;
+        const solDiffStr = solDiff >= 0 ? `+${solDiff.toFixed(1)}` : solDiff.toFixed(1);
 
-          // Format vs SOL performance
-          const solDiff = coin.solPerformanceDiff || 0;
-          const solDiffStr = solDiff >= 0 ? `+${solDiff.toFixed(1)}` : solDiff.toFixed(1);
-
-          // Clean format: bold symbol, copyable contract, metrics
-          batchReport += `*${coin.symbol}*\n`;
-          batchReport += `\`${coin.contractAddress}\`\n`;
-          batchReport += `💰 ${priceWithDelta} │ 📉 ${retrace}% │ 📊 ${volume} │ SOL: ${solDiffStr}%\n\n`;
-        }
-
-        await this.sendMessage(msg.chat.id.toString(), batchReport, 'MarkdownV2');
-
-        // Small delay between messages
-        if (i + coinsPerMessage < reportData.length) {
-          await new Promise(resolve => setTimeout(resolve, 500));
-        }
+        report += `\`${coin.symbol.padEnd(8)} ${priceWithDelta.padEnd(16)} │${retrace.padStart(6)}%│${volume.padStart(5)} │${solDiffStr.padStart(5)}%\`\n`;
       }
+
+      await this.sendMessage(msg.chat.id.toString(), report, 'MarkdownV2');
     } catch (error) {
       await this.sendMessage(
         msg.chat.id.toString(), 
         `❌ Failed to generate report: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  private async handleListContracts(msg: Message): Promise<void> {
+    try {
+      const reportData = await this.longList.generateAnchorReport();
+
+      if (reportData.length === 0) {
+        await this.sendMessage(
+          msg.chat.id.toString(),
+          '❌ No coins in the long list\\. Use `/long_add` to add coins\\.',
+          'MarkdownV2'
+        );
+        return;
+      }
+
+      let message = `📋 *Long List Contracts*\n\n`;
+
+      for (const coin of reportData) {
+        message += `${coin.symbol}: \`${coin.contractAddress}\`\n`;
+      }
+
+      await this.sendMessage(msg.chat.id.toString(), message, 'MarkdownV2');
+    } catch (error) {
+      await this.sendMessage(
+        msg.chat.id.toString(),
+        `❌ Failed to list contracts: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

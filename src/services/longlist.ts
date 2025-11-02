@@ -485,8 +485,8 @@ export class LongListService {
           continue;
         }
 
-        const retraceFrom72hHigh = state.h72High ? 
-          ((state.h72High - pair.price) / state.h72High * 100) : 0;
+        const retraceFrom72hHigh = state.h72High ?
+          ((pair.price - state.h72High) / state.h72High * 100) : 0;
 
         // Calculate performance difference vs SOL
         const solPerformanceDiff = pair.priceChange24h - solChange24h;
