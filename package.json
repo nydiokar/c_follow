@@ -33,7 +33,10 @@
     "backup:cleanup": "./scripts/backup.sh cleanup",
     "monitor:start": "./scripts/monitor.sh start",
     "monitor:stop": "./scripts/monitor.sh stop",
-    "monitor:status": "./scripts/monitor.sh status"
+    "monitor:status": "./scripts/monitor.sh status",
+    "fetch-tokens": "npm run build && node dist/scripts/fetch_jupiter_tokens.js",
+    "bulk-add": "npm run build && node dist/scripts/bulk_add_longlist.js",
+    "extract-category": "npm run build && node dist/scripts/extract_category.js"
   },
   "dependencies": {
     "@prisma/client": "^6.16.2",

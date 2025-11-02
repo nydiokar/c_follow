@@ -48,6 +48,7 @@ export interface TriggerResult {
 
 export interface AnchorReportData {
   symbol: string;
+  contractAddress: string;
   price: number;
   change24h: number;
   retraceFrom72hHigh: number;

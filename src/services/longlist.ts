@@ -493,6 +493,7 @@ export class LongListService {
 
         reportData.push({
           symbol: pair.symbol,
+          contractAddress: coin.tokenAddress,
           price: pair.price,
           change24h: pair.priceChange24h,
           retraceFrom72hHigh,

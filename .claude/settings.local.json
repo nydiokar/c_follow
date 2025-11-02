@@ -12,7 +12,9 @@
       "Bash(npm run:*)",
       "Bash(npm install)",
       "Bash(sqlite3:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(curl -s \"https://lite-api.jup.ag/tokens/v2/search?query=dreams\")",
+      "Bash(npx ts-node:*)"
     ],
     "deny": [
       "Bash(rm:*)",
